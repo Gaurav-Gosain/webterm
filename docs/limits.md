@@ -71,6 +71,8 @@ ghostty-vt is not a dependency of this package and must not become one. It was t
 
 ## The overlay reads two private fields
 
+Both reaches, and the APC registration alongside them, are confined to [`src/kitty/xterm-adapter.ts`](../src/kitty/xterm-adapter.ts). Nothing else under `src/kitty/` names a private property.
+
 `term._core._renderService.dimensions.css.cell` is the accurate cell box and is not public API. Two public fallbacks sit behind it: `.xterm-screen`'s client size divided by the grid, and finally a ratio derived from the font size (0.6 by 1.2), which will misplace images on a font whose metrics differ. A rename upstream degrades the overlay's positioning accuracy; it does not break it.
 
 `term._core._inputHandler` is the second, and it drives the cursor advance after a placement: the overlay calls its `lineFeed()` to move down and its optional `_moveCursor()` to move across. It is probed once, behind a `typeof candidate.lineFeed === 'function'` check. There are two ways to lose it and they degrade differently. If the build exposes the handler but not `_moveCursor`, the rows still move and the horizontal remainder is dropped. If the handler is missing entirely, the overlay falls back to writing `\n` per row plus a `CSI <cols> C`, so the movement still happens but is queued as ordinary output and lands after the rest of the current chunk rather than synchronously. Neither path throws.

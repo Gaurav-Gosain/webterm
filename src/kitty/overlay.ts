@@ -27,7 +27,13 @@
  *   Compress: o=z (zlib through DecompressionStream)
  *   Chunks:   m=0, m=1, accumulated per image id until m=0
  *   Keys:     i, I, p, s, v, c, r, x, y, w, h, X, Y, z, C, q
- *   Delete:   d=a|A (all), d=i|I (by image id), d=p|P (by placement id)
+ *   Delete:   d=a|A (all), d=i|I (by image id), d=n|N (by image number),
+ *             d=p|P (by placement id)
+ *
+ * `i` and `I` are distinct namespaces: `i` is an id the client chooses and the
+ * terminal honours as given, `I` is a number the client chooses that the
+ * terminal maps to an id of its own, echoes back in its responses, and accepts
+ * on any later command addressed by that number.
  *
  * Deliberately out of scope:
  *   - Animation (a=f, a=a, a=c)
@@ -39,7 +45,6 @@
 import type { IMarker, Terminal } from '@xterm/xterm';
 import type { KittyOptions } from '../types.js';
 import {
-  KITTY_APC_IDENT,
   base64Decode,
   clampSourceRect,
   fitRgba,
@@ -48,18 +53,7 @@ import {
   splitApc,
   type KittyCommand,
 } from './protocol.js';
-
-/**
- * The slice of xterm's private input handler the cursor advance drives.
- *
- * `lineFeed` is the same entry point the parser uses for a `\n`, so it scrolls
- * at the bottom of the screen and keeps the buffer consistent. `_moveCursor` is
- * optional: losing it costs the horizontal half of the movement, not the rows.
- */
-interface InputHandlerLike {
-  lineFeed(): void;
-  _moveCursor?(x: number, y: number): void;
-}
+import { createXtermAdapter, supportsApc, type XtermAdapter } from './xterm-adapter.js';
 
 interface StoredImage {
   bitmap: ImageBitmap;
@@ -132,29 +126,6 @@ export interface KittyGraphicsOptions extends KittyOptions {
   respond?(data: string): void;
 }
 
-/**
- * Register the kitty APC handler across the two shapes xterm has shipped.
- *
- * Older builds take the identifier as a number and hand the callback the
- * payload including the ident byte. Current builds take an IFunctionIdentifier
- * (`{ final: 'G' }`) and strip the ident first. splitApc tolerates both, so all
- * that differs here is the argument. The number form is tried second because
- * the object form is what the API is documented as taking now.
- */
-function registerKittyApc(
-  term: Terminal,
-  handler: (data: string) => boolean,
-): { dispose(): void } {
-  const parser = term.parser as unknown as {
-    registerApcHandler(id: unknown, callback: (data: string) => boolean): { dispose(): void };
-  };
-  try {
-    return parser.registerApcHandler({ final: String.fromCharCode(KITTY_APC_IDENT) }, handler);
-  } catch {
-    return parser.registerApcHandler(KITTY_APC_IDENT, handler);
-  }
-}
-
 export class KittyGraphics {
   private readonly anchor: 'scrollback' | 'viewport';
   private readonly storageLimit: number;
@@ -211,15 +182,16 @@ export class KittyGraphics {
   readonly element: HTMLDivElement;
   private disposed = false;
   private repositionPending = false;
-  private handler: InputHandlerLike | null = null;
-  private handlerChecked = false;
   private useCounter = 0;
   private readonly teardown: Array<() => void> = [];
   private readonly term: Terminal;
+  /** The one route to xterm's internals; see ./xterm-adapter.ts. */
+  private readonly xterm: XtermAdapter;
   private readonly respond?: (data: string) => void;
 
   constructor(term: Terminal, container: HTMLElement, options: KittyGraphicsOptions = {}) {
     this.term = term;
+    this.xterm = createXtermAdapter(term);
     this.anchor = options.anchor ?? 'scrollback';
     this.storageLimit = options.storageLimit ?? 128;
     this.respond = options.respond;
@@ -245,11 +217,11 @@ export class KittyGraphics {
 
   /** True when the running xterm build exposes the APC parser this depends on. */
   static supported(term: Terminal): boolean {
-    return typeof (term.parser as { registerApcHandler?: unknown }).registerApcHandler === 'function';
+    return supportsApc(term);
   }
 
   private install(): void {
-    const apc = registerKittyApc(this.term, (data) => this.onApc(data));
+    const apc = this.xterm.registerApc((data) => this.onApc(data));
     this.teardown.push(() => apc.dispose());
 
     // Reposition on scroll and resize, batched to a microtask so a burst of
@@ -915,17 +887,7 @@ export class KittyGraphics {
    * scroll at the bottom of the screen happens exactly as it does for text.
    */
   private advanceCursor(cols: number, rows: number): void {
-    const handler = this.inputHandler();
-    if (!handler) {
-      // No private input handler on this build. Queueing the movement still
-      // consumes the rows, which is much closer to right than not moving at
-      // all; it only lands after the remainder of the current chunk.
-      const seq = '\n'.repeat(Math.max(0, rows)) + (cols > 0 ? `\x1b[${cols}C` : '');
-      if (seq) this.term.write(seq);
-      return;
-    }
-    for (let i = 0; i < rows; i++) handler.lineFeed();
-    if (cols > 0) handler._moveCursor?.(cols, 0);
+    this.xterm.advanceCursor(cols, rows);
   }
 
   /**
@@ -945,20 +907,6 @@ export class KittyGraphics {
     const moves = (cmd.C ?? 0) !== 1 && (cmd.U ?? 0) !== 1 && (cmd.P ?? 0) === 0;
     if (moves) this.advanceCursor(size.cols, size.rows);
     return size;
-  }
-
-  /** xterm's input handler, when this build exposes it. */
-  private inputHandler(): InputHandlerLike | null {
-    if (this.handlerChecked) return this.handler;
-    this.handlerChecked = true;
-    try {
-      const candidate = (this.term as unknown as { _core?: { _inputHandler?: InputHandlerLike } })
-        ._core?._inputHandler;
-      if (candidate && typeof candidate.lineFeed === 'function') this.handler = candidate;
-    } catch {
-      this.handler = null;
-    }
-    return this.handler;
   }
 
   // --- Geometry -------------------------------------------------------------
@@ -1020,36 +968,8 @@ export class KittyGraphics {
     return absolute - this.term.buffer.active.viewportY;
   }
 
-  /**
-   * The cell box in CSS pixels.
-   *
-   * The private render service is the accurate answer and stays correct through
-   * font, size and device pixel ratio changes, but it is not public API and can
-   * be renamed in any release. The fallback measures the rendered screen
-   * element against the grid, which is public and real rather than an estimate
-   * from the font size; only when there is no element yet does it fall back to
-   * a ratio, which will misplace images on a font whose metrics differ.
-   */
+  /** The cell box in CSS pixels, every placement's unit of measure. */
   private cellPixels(): { width: number; height: number } {
-    try {
-      const dims = (
-        this.term as unknown as {
-          _core: { _renderService: { dimensions: { css: { cell: { width: number; height: number } } } } };
-        }
-      )._core._renderService.dimensions.css.cell;
-      if (dims && dims.width && dims.height) return { width: dims.width, height: dims.height };
-    } catch {
-      // Private path gone or renamed; fall through to the measured one.
-    }
-
-    const screen = this.term.element?.querySelector('.xterm-screen') as HTMLElement | null;
-    if (screen && this.term.cols > 0 && this.term.rows > 0) {
-      const width = screen.clientWidth / this.term.cols;
-      const height = screen.clientHeight / this.term.rows;
-      if (width > 0 && height > 0) return { width, height };
-    }
-
-    const fontSize = this.term.options.fontSize ?? 14;
-    return { width: fontSize * 0.6, height: fontSize * 1.2 };
+    return this.xterm.cellPixels();
   }
 }

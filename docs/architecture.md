@@ -60,7 +60,15 @@ The kitty protocol parser ([`src/kitty/protocol.ts`](../src/kitty/protocol.ts)) 
 
 ## Where the private access is
 
-One place, in [`KittyGraphics.cellPixels()`](../src/kitty/overlay.ts). `term._core._renderService.dimensions.css.cell` is the accurate cell box and stays correct through font, size and device pixel ratio changes, but it is not public API. Two public fallbacks sit behind it: `.xterm-screen`'s client size divided by the grid, which is real rather than an estimate, and finally `fontSize * 0.6` by `fontSize * 1.2`, which will misplace images on a font whose metrics differ from that ratio.
+One file, [`src/kitty/xterm-adapter.ts`](../src/kitty/xterm-adapter.ts). Nothing else under `src/kitty/` casts through `unknown` to an underscore-prefixed property; the overlay talks to the object that module returns. That is deliberate: an xterm release that renames an internal is one file to read and one file to fix rather than a search across the graphics code. Three dependencies live there, each with its degradation written down beside it.
+
+`term.parser.registerApcHandler` routes the kitty APC. It is absent from @xterm/xterm 6.0.0 and present only in the 6.1.0 beta, so it is also absent from the published types even where it exists at runtime, and it is the reason the package's peer range is `^5.5.0 || >=6.1.0-beta.0`. `supportsApc` reports it up front, so a consumer on a build without it gets a working terminal with no kitty graphics rather than a broken one.
+
+`term._core._renderService.dimensions.css.cell` is the accurate cell box and stays correct through font, size and device pixel ratio changes, but it is not public API. Two public fallbacks sit behind it: `.xterm-screen`'s client size divided by the grid, which is real rather than an estimate, and finally `fontSize * 0.6` by `fontSize * 1.2`, which will misplace images on a font whose metrics differ from that ratio.
+
+`term._core._inputHandler` drives the cursor advance after a placement, and falls back to a queued write that lands a chunk late.
+
+The kitty keyboard protocol needs none of this. `parser.registerCsiHandler`, `attachCustomKeyEventHandler`, `buffer.onBufferChange` and `input` are all published, documented API, so there is nothing there to isolate or to break.
 
 There is a second, milder reach in [`installUnicodeOverrides()`](../src/unicode.ts): it patches `register` on the prototype of xterm's `UnicodeApi` for the duration of `loadAddon`, so it can capture the provider instance the addon registers without reading the addon's private fields. The patch is restored in a `finally`. It has to go on the prototype rather than an instance because `Terminal.unicode` is a getter that constructs a fresh `UnicodeApi` on every access, so the object the addon registers through is never the one read afterwards.
 
