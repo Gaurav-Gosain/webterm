@@ -193,7 +193,16 @@ export class WebTerm {
     if (kitty) {
       if (KittyGraphics.supported(term)) {
         const kittyOptions: KittyOptions = typeof kitty === 'object' ? kitty : {};
-        this.overlay = new KittyGraphics(term, container, kittyOptions);
+        this.overlay = new KittyGraphics(term, container, {
+          ...kittyOptions,
+          // A capability probe is only answered if the reply reaches the
+          // application, so it takes the same route and the same read-only
+          // gate a keystroke does.
+          respond: (data) => {
+            if (this.options.input?.readOnly) return;
+            this.emitData(this.encoder.encode(data));
+          },
+        });
       } else {
         // @xterm/xterm 6.0.0 shipped without the APC parser this depends on;
         // 6.1.0 restored it. Warn rather than throw, so a consumer on such a
@@ -279,15 +288,25 @@ export class WebTerm {
 
   private syncReservedKeys?: () => void;
 
+  /**
+   * The single outbound path for anything the terminal sends to the
+   * application: keystrokes, pastes and protocol responses alike. Chunked, then
+   * both announced to `data` listeners and written to the transport, so a
+   * consumer that wires its own protocol by hand and one that calls `attach`
+   * see exactly the same bytes.
+   */
+  private emitData(bytes: Uint8Array): void {
+    for (const chunk of chunkBytes(bytes, this.options.input?.chunkBytes ?? DEFAULT_CHUNK_BYTES)) {
+      this.emitter.emit('data', chunk);
+      void this.transport?.send(chunk);
+    }
+  }
+
   private wireEvents(term: Terminal): void {
     const subs = [
       term.onData((data) => {
         if (this.options.input?.readOnly) return;
-        const bytes = this.encoder.encode(data);
-        for (const chunk of chunkBytes(bytes, this.options.input?.chunkBytes ?? DEFAULT_CHUNK_BYTES)) {
-          this.emitter.emit('data', chunk);
-          void this.transport?.send(chunk);
-        }
+        this.emitData(this.encoder.encode(data));
       }),
       term.onBinary((data) => {
         if (this.options.input?.readOnly) return;

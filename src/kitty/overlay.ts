@@ -75,6 +75,17 @@ interface Placement {
 export interface KittyGraphicsOptions extends KittyOptions {
   /** Overlay class name, so a consumer can style or find the layer. */
   className?: string;
+  /**
+   * Sends a protocol response back to the application, by the same route a
+   * keystroke takes.
+   *
+   * Kitty graphics is request/response for capability detection: a client
+   * emits `a=q` probes and refuses to send any image at all if none of them
+   * come back. Leaving this unset renders images from a sender that transmits
+   * unconditionally, and makes every well-behaved client conclude the terminal
+   * has no graphics support. `WebTerm` wires it to the `data` event.
+   */
+  respond?(data: string): void;
 }
 
 /**
@@ -131,11 +142,13 @@ export class KittyGraphics {
   private useCounter = 0;
   private readonly teardown: Array<() => void> = [];
   private readonly term: Terminal;
+  private readonly respond?: (data: string) => void;
 
   constructor(term: Terminal, container: HTMLElement, options: KittyGraphicsOptions = {}) {
     this.term = term;
     this.anchor = options.anchor ?? 'scrollback';
     this.storageLimit = options.storageLimit ?? 128;
+    this.respond = options.respond;
 
     this.element = document.createElement('div');
     this.element.className = options.className ?? 'webterm-kitty-overlay';
@@ -238,8 +251,7 @@ export class KittyGraphics {
           this.handleDelete(control);
           break;
         case 'q':
-          // A query is answered by whatever sits between the application and
-          // the browser, not here.
+          this.handleQuery(control);
           break;
         default:
           // Unknown action: swallow, so the payload does not leak to the screen.
@@ -249,6 +261,67 @@ export class KittyGraphics {
       console.warn('webterm: kitty handler error', error, control);
     }
     return true;
+  }
+
+  // --- Query / response -----------------------------------------------------
+
+  /**
+   * Answer an `a=q` capability probe.
+   *
+   * kitten icat opens with three probes in one burst, then a primary device
+   * attributes request as a sentinel:
+   *
+   *   ESC _ G a=q,f=24,s=1,v=1,S=3,i=1;MTIz          ESC \   direct
+   *   ESC _ G a=q,f=24,t=t,s=1,v=1,S=47,i=2;<path>   ESC \   temp file
+   *   ESC _ G a=q,f=24,t=s,s=1,v=1,S=18,i=3;<name>   ESC \   shared memory
+   *   ESC [ c
+   *
+   * It picks a transfer mode from whichever probes come back OK, and if the
+   * DA1 reply arrives with no graphics reply at all it decides the terminal
+   * has no support and refuses to send the image.
+   *
+   * Only direct transmission is answered OK. The temp-file and shared-memory
+   * media name paths in the far end's filesystem, which a browser cannot read,
+   * so those are reported unsupported and the client settles on stream mode,
+   * which is the direct base64 form this overlay decodes.
+   */
+  private handleQuery(cmd: KittyCommand): void {
+    if ((cmd.t ?? 'd') === 'd') {
+      this.sendResponse(cmd, 'OK');
+    } else {
+      this.sendResponse(cmd, 'ENOTSUPPORTED:transmission medium not supported by a browser client');
+    }
+  }
+
+  /**
+   * Emit `ESC _ G <id keys> ; <message> ESC \` back to the application.
+   *
+   * The id keys are echoed from the request so the client can match the reply
+   * to its probe. A command carrying neither `i` nor `I` is unaddressable and
+   * per the protocol gets no reply at all. Quiet mode suppresses replies: q=1
+   * drops successes, q=2 drops everything. Errors are reported rather than
+   * dropped, since a client that gets no answer waits out its timeout instead
+   * of moving on.
+   */
+  private sendResponse(cmd: KittyCommand, message: string): void {
+    if (!this.respond) return;
+
+    const quiet = cmd.q ?? 0;
+    const ok = message === 'OK';
+    if (quiet >= 2) return;
+    if (quiet >= 1 && ok) return;
+
+    const keys: string[] = [];
+    if (cmd.i !== undefined && cmd.i !== 0) keys.push(`i=${cmd.i}`);
+    if (cmd.I !== undefined && cmd.I !== 0) keys.push(`I=${cmd.I}`);
+    if (keys.length === 0) return;
+    if (cmd.p !== undefined && cmd.p !== 0) keys.push(`p=${cmd.p}`);
+
+    try {
+      this.respond(`\x1b_G${keys.join(',')};${message}\x1b\\`);
+    } catch (error) {
+      console.warn('webterm: kitty response failed', error);
+    }
   }
 
   // --- Transmit -------------------------------------------------------------

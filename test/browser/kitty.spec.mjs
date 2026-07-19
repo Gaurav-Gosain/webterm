@@ -373,3 +373,100 @@ test('disposing removes the overlay from the container', async ({ page }) => {
   expect(after.before).toBe(1);
   expect(after.after).toBe(0);
 });
+
+// --- capability probes -----------------------------------------------------
+//
+// Kitty graphics is request/response for detection: a client emits a=q probes
+// and refuses to send the image at all unless the terminal answers. An overlay
+// that renders placements but never replies leaves every probe unanswered and
+// makes kitten icat report no graphics support, so these cover the reply path
+// rather than the rendering.
+
+/** Everything the terminal sent to the application while running `sequence`. */
+async function captureResponses(page, sequence) {
+  return page.evaluate(async (seq) => {
+    window.events.data.length = 0;
+    window.term.write(seq);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 100));
+    const decoder = new TextDecoder();
+    return window.events.data.map((bytes) => decoder.decode(bytes)).join('');
+  }, sequence);
+}
+
+test('a query for direct transmission is answered OK', async ({ page }) => {
+  await boot(page);
+  // The first of the three probes kitten icat opens with.
+  const sent = await captureResponses(page, '\x1b_Ga=q,f=24,s=1,v=1,S=3,i=1;MTIz\x1b\\');
+  expect(sent).toBe('\x1b_Gi=1;OK\x1b\\');
+});
+
+test('a query for an unreachable medium is answered with an error', async ({ page }) => {
+  await boot(page);
+  // t=t and t=s name paths in the far end's filesystem, which a browser cannot
+  // read. Reporting the error rather than staying silent is what lets a client
+  // settle on stream mode instead of waiting out its timeout.
+  const sent = await captureResponses(page, '\x1b_Ga=q,f=24,t=t,s=1,v=1,i=2;L3RtcC94\x1b\\');
+  expect(sent).toContain('\x1b_Gi=2;ENOTSUPPORTED:');
+  expect(sent).not.toContain('OK');
+});
+
+test('quiet mode suppresses the responses it should', async ({ page }) => {
+  await boot(page);
+
+  // q=1 drops successes but keeps errors.
+  expect(await captureResponses(page, '\x1b_Ga=q,f=24,q=1,s=1,v=1,i=7;MTIz\x1b\\')).toBe('');
+  expect(await captureResponses(page, '\x1b_Ga=q,f=24,t=s,q=1,s=1,v=1,i=8;MTIz\x1b\\')).toContain(
+    '\x1b_Gi=8;ENOTSUPPORTED:',
+  );
+
+  // q=2 drops everything.
+  expect(await captureResponses(page, '\x1b_Ga=q,f=24,q=2,s=1,v=1,i=9;MTIz\x1b\\')).toBe('');
+  expect(await captureResponses(page, '\x1b_Ga=q,f=24,t=s,q=2,s=1,v=1,i=10;MTIz\x1b\\')).toBe('');
+
+  // A command carrying no id is unaddressable, so there is nothing to answer.
+  expect(await captureResponses(page, '\x1b_Ga=q,f=24,s=1,v=1;MTIz\x1b\\')).toBe('');
+});
+
+test('a probe reply reaches an attached transport, not just data listeners', async ({ page }) => {
+  await boot(page);
+
+  // The reply has to take the same route a keystroke does. Emitting it to
+  // `data` alone would satisfy the tests above while leaving every consumer
+  // that wires a transport with attach() answering no probes at all.
+  const sent = await page.evaluate(async () => {
+    const seen = [];
+    window.term.attach({
+      start(sink) {
+        window.sink = sink;
+      },
+      send(bytes) {
+        seen.push(new TextDecoder().decode(bytes));
+      },
+      close() {},
+    });
+    window.term.write('\x1b_Ga=q,f=24,s=1,v=1,i=42;MTIz\x1b\\');
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 100));
+    return seen.join('');
+  });
+
+  expect(sent).toBe('\x1b_Gi=42;OK\x1b\\');
+});
+
+test('a read-only terminal answers no probes', async ({ page }) => {
+  await boot(page);
+
+  // A viewer must not write into someone else's session, and a protocol reply
+  // is a write like any other.
+  const sent = await page.evaluate(async () => {
+    window.term.setOptions({ input: { readOnly: true } });
+    window.events.data.length = 0;
+    window.term.write('\x1b_Ga=q,f=24,s=1,v=1,i=5;MTIz\x1b\\');
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 100));
+    return window.events.data.length;
+  });
+
+  expect(sent).toBe(0);
+});
