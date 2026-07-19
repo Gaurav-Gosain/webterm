@@ -21,6 +21,7 @@ import {
   installReservedKeyCapture,
 } from './input.js';
 import { KittyGraphics } from './kitty/overlay.js';
+import { withPlaceholderFont } from './kitty/placeholder-glyph.js';
 import { KittyKeyboard } from './keyboard/keyboard.js';
 import { RendererManager } from './renderer.js';
 import { resolveTheme, type ThemeName } from './themes.js';
@@ -565,7 +566,13 @@ export class WebTerm {
     if (!term) return;
 
     if (options.fontSize !== undefined) term.options.fontSize = options.fontSize;
-    if (options.fontFamily !== undefined) term.options.fontFamily = options.fontFamily;
+    if (options.fontFamily !== undefined) {
+      // The placeholder face lives at the end of the stack and has to survive
+      // an embedder replacing the stack wholesale; see kitty/placeholder-glyph.
+      term.options.fontFamily = this.overlay
+        ? withPlaceholderFont(options.fontFamily)
+        : options.fontFamily;
+    }
     if (options.lineHeight !== undefined) term.options.lineHeight = options.lineHeight;
     if (options.cursorBlink !== undefined) term.options.cursorBlink = options.cursorBlink;
     if (options.cursorStyle !== undefined) term.options.cursorStyle = options.cursorStyle;

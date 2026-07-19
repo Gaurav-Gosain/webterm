@@ -1,4 +1,6 @@
 export { KittyGraphics, type KittyGraphicsOptions } from './overlay.js';
+export { installPlaceholderGlyph, withPlaceholderFont } from './placeholder-glyph.js';
+export { scanPlaceholders, PLACEHOLDER_CODE, type PlaceholderRun } from './placeholders.js';
 export {
   createXtermAdapter,
   supportsApc,

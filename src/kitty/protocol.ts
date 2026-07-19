@@ -30,10 +30,20 @@ export interface KittyCommand {
   z?: number;
   m?: number;
   q?: number;
+  /** 1 for a virtual placement, shown through unicode placeholder cells. */
+  U?: number;
+  /** Non-zero for a placement positioned relative to another one. */
+  P?: number;
 }
 
-/** Keys whose values are numeric. Everything else stays a string. */
-const NUMERIC_KEYS = 'iIps vwhxyXYzcrmqCSO';
+/**
+ * Keys whose values are numeric. Everything else stays a string.
+ *
+ * A key missing from here is not a cosmetic difference: it arrives as the
+ * string '1' and every `=== 1` test against it silently fails. `U` was missing,
+ * which made virtual placements indistinguishable from ordinary ones.
+ */
+const NUMERIC_KEYS = 'iIpsvwhxyXYzcrmqCSOUP';
 
 export function parseControl(str: string): KittyCommand {
   const out: KittyCommand = {};

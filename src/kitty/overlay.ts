@@ -26,7 +26,7 @@
  *   Formats:  f=24 (RGB), f=32 (RGBA), f=100 (PNG)
  *   Compress: o=z (zlib through DecompressionStream)
  *   Chunks:   m=0, m=1, accumulated per image id until m=0
- *   Keys:     i, I, p, s, v, c, r, x, y, w, h, X, Y, z, C, q
+ *   Keys:     i, I, p, s, v, c, r, x, y, w, h, X, Y, z, C, U, q
  *   Delete:   d=a|A (all), d=i|I (by image id), d=n|N (by image number),
  *             d=p|P (by placement id)
  *
@@ -35,12 +35,15 @@
  * terminal maps to an id of its own, echoes back in its responses, and accepts
  * on any later command addressed by that number.
  *
+ * Unicode placeholder placements (U=1) are read back off the cell buffer rather
+ * than positioned at the cursor; see ./placeholders.ts for why that is the only
+ * way to cover exactly the cells the client reserved.
+ *
  * Deliberately out of scope:
  *   - Animation (a=f, a=a, a=c)
  *   - File, temp file and shared memory transmission (t=f, t=t, t=s). A browser
  *     cannot read the sender's filesystem; a server that wants these to work
  *     re-encodes them into direct transmissions before they reach the page.
- *   - Unicode placeholder placement (U=1)
  */
 import type { IMarker, Terminal } from '@xterm/xterm';
 import type { KittyOptions } from '../types.js';
@@ -54,6 +57,29 @@ import {
   type KittyCommand,
 } from './protocol.js';
 import { createXtermAdapter, supportsApc, type XtermAdapter } from './xterm-adapter.js';
+import { scanPlaceholders, type PlaceholderRun } from './placeholders.js';
+import { installPlaceholderGlyph } from './placeholder-glyph.js';
+
+/**
+ * A virtual placement: an image the client placed with U=1, waiting for the
+ * placeholder cells that say where it goes.
+ *
+ * `gridCols` and `gridRows` are the size of the placement's own cell grid, over
+ * which the image is stretched. The client may declare it with `c` and `r`.
+ * When it does not, it is estimated from the source pixels against this
+ * terminal's cell box and then corrected upwards by what the placeholder cells
+ * turn out to say, since the client's cell box is the one that decided it.
+ */
+interface VirtualImage {
+  srcX: number;
+  srcY: number;
+  srcW: number;
+  srcH: number;
+  z: number;
+  gridCols: number;
+  gridRows: number;
+  declared: boolean;
+}
 
 interface StoredImage {
   bitmap: ImageBitmap;
@@ -179,9 +205,17 @@ export class KittyGraphics {
    */
   private readonly decoding = new Set<number>();
 
+  /** Images placed with U=1, keyed by image id. */
+  private readonly virtual = new Map<number, VirtualImage>();
+  /** Canvases covering placeholder runs, reused across scans. */
+  private readonly virtualCanvases: HTMLCanvasElement[] = [];
+  /** The runs the last scan found, kept only so placementCount can report them. */
+  private virtualRuns: PlaceholderRun[] = [];
+
   readonly element: HTMLDivElement;
   private disposed = false;
   private repositionPending = false;
+  private scanPending = false;
   private useCounter = 0;
   private readonly teardown: Array<() => void> = [];
   private readonly term: Terminal;
@@ -212,6 +246,10 @@ export class KittyGraphics {
     if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
     container.appendChild(this.element);
 
+    // The placeholder character must stop being drawn as text whether or not
+    // an image ever covers it, so this is not conditional on any placement.
+    installPlaceholderGlyph(term);
+
     this.install();
   }
 
@@ -238,6 +276,12 @@ export class KittyGraphics {
     const onResize = this.term.onResize(schedule);
     this.teardown.push(() => onScroll.dispose(), () => onResize.dispose());
 
+    // A virtual placement lives in the cells rather than at a captured
+    // position, so any change to what is on the grid can move it, add to it or
+    // take it away. onRender is the one event that fires for all of those.
+    const onRender = this.term.onRender(() => this.scheduleScan());
+    this.teardown.push(() => onRender.dispose());
+
     // Switching screens changes which placements are on screen at all, and the
     // alternate screen's own placements are discarded with its text.
     const onBufferChange = this.term.buffer.onBufferChange(() => {
@@ -253,7 +297,10 @@ export class KittyGraphics {
     try {
       const onErase = this.term.parser.registerCsiHandler({ final: 'J' }, (params) => {
         const mode = Number(params[0] ?? 0);
-        if (mode === 2 || mode === 3) this.dropPlacements(() => true);
+        if (mode === 2 || mode === 3) {
+          this.dropPlacements(() => true);
+          this.clearVirtual();
+        }
         return false;
       });
       this.teardown.push(() => onErase.dispose());
@@ -281,6 +328,7 @@ export class KittyGraphics {
     for (const image of this.images.values()) this.closeBitmap(image.bitmap);
     this.images.clear();
     this.idByNumber.clear();
+    this.clearVirtual();
     this.pixelSizes.clear();
     this.pending.clear();
     this.pendingPlacement.clear();
@@ -303,7 +351,7 @@ export class KittyGraphics {
   }
 
   get placementCount(): number {
-    return this.placements.size;
+    return this.placements.size + this.virtualRuns.length;
   }
 
   get imageCount(): number {
@@ -647,6 +695,15 @@ export class KittyGraphics {
     if (!img) return;
     img.used = ++this.useCounter;
 
+    // U=1 is a virtual placement: it has no position of its own and the client
+    // says where it goes by writing a placeholder grid. Anchoring a canvas to
+    // the cursor here would put the image wherever the cursor happened to be,
+    // sized by this terminal's cell box rather than the client's.
+    if ((spec.cmd.U ?? 0) === 1) {
+      this.registerVirtual(imageId, spec.cmd, img);
+      return;
+    }
+
     const placementId = (spec.cmd.p ?? 0) || 1;
     const key = `${imageId}/${placementId}`;
 
@@ -694,6 +751,147 @@ export class KittyGraphics {
 
     this.renderPlacement(placement, img);
     this.positionPlacement(placement);
+  }
+
+  // --- Virtual placements (U=1) ---------------------------------------------
+
+  /**
+   * Record an image placed with U=1 and look for the cells that show it.
+   *
+   * The grid size is reset to the client's declaration, or to an estimate when
+   * it made none, rather than carried over: an image re-transmitted under the
+   * same id is a different image and the grid it was measured against before
+   * says nothing about the new one. The scan that follows corrects the estimate.
+   */
+  private registerVirtual(imageId: number, cmd: KittyCommand, img: StoredImage): void {
+    const derived = this.placementCells(cmd, img) ?? { cols: 1, rows: 1 };
+    const declaredCols = cmd.c ?? 0;
+    const declaredRows = cmd.r ?? 0;
+    this.virtual.set(imageId, {
+      srcX: cmd.x ?? 0,
+      srcY: cmd.y ?? 0,
+      srcW: (cmd.w ?? 0) || img.width,
+      srcH: (cmd.h ?? 0) || img.height,
+      z: cmd.z ?? 0,
+      gridCols: declaredCols || derived.cols,
+      gridRows: declaredRows || derived.rows,
+      declared: declaredCols > 0 && declaredRows > 0,
+    });
+    this.scanVirtual();
+  }
+
+  /** Coalesce scans to one per frame; onRender can fire several times a frame. */
+  private scheduleScan(): void {
+    if (this.scanPending || this.disposed || this.virtual.size === 0) return;
+    this.scanPending = true;
+    queueMicrotask(() => {
+      this.scanPending = false;
+      if (!this.disposed) this.scanVirtual();
+    });
+  }
+
+  /**
+   * Cover every placeholder cell on screen with the image it names.
+   *
+   * The geometry comes entirely from the cells: a run of placeholder cells is
+   * covered by a canvas whose box is that run's column count times the same
+   * cell width the grid itself is laid out with, at that run's column times the
+   * same width. There is no second derivation of how many cells the image
+   * occupies, so there is nothing for a rounding difference to disagree about.
+   */
+  private scanVirtual(): void {
+    if (this.virtual.size === 0) {
+      if (this.virtualRuns.length) this.trimVirtualCanvases(0);
+      this.virtualRuns = [];
+      return;
+    }
+
+    const runs = scanPlaceholders(this.term).filter((run) => this.virtual.has(run.imageId));
+
+    // The client's grid is the authority on how many cells the image spans, and
+    // the placeholder cells are the only place it states it when it sends no
+    // `c` and `r`. Widen the estimate before anything is drawn from it.
+    for (const run of runs) {
+      const image = this.virtual.get(run.imageId);
+      if (!image || image.declared) continue;
+      image.gridCols = Math.max(image.gridCols, run.srcCol + run.cols);
+      image.gridRows = Math.max(image.gridRows, run.srcRow + run.rows);
+    }
+
+    const cell = this.xterm.cellPixels();
+    const dpr = window.devicePixelRatio || 1;
+
+    runs.forEach((run, index) => {
+      const image = this.virtual.get(run.imageId);
+      const stored = this.images.get(run.imageId);
+      if (!image || !stored) return;
+      stored.used = ++this.useCounter;
+
+      const canvas = this.virtualCanvas(index);
+      // The box is the exact fractional geometry of the cells, never rounded:
+      // rounding down leaves the far edge of the run showing and rounding up
+      // covers a cell the client did not reserve. The backing store rounds up
+      // instead, so the canvas never has fewer device pixels than its box.
+      const cssW = run.cols * cell.width;
+      const cssH = run.rows * cell.height;
+      canvas.width = Math.max(1, Math.ceil(cssW * dpr));
+      canvas.height = Math.max(1, Math.ceil(cssH * dpr));
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      canvas.style.zIndex = String(image.z);
+      canvas.style.transform = `translate(${run.cellX * cell.width}px, ${run.screenRow * cell.height}px)`;
+      canvas.style.display = 'block';
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(canvas.width / cssW, 0, 0, canvas.height / cssH, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      // The slice of the source this run shows, from the run's place in the
+      // image's own cell grid.
+      const sliceW = image.srcW / Math.max(1, image.gridCols);
+      const sliceH = image.srcH / Math.max(1, image.gridRows);
+      const src = clampSourceRect(
+        {
+          x: image.srcX + run.srcCol * sliceW,
+          y: image.srcY + run.srcRow * sliceH,
+          w: run.cols * sliceW,
+          h: run.rows * sliceH,
+        },
+        stored,
+      );
+      if (src.w > 0 && src.h > 0) {
+        ctx.drawImage(stored.bitmap, src.x, src.y, src.w, src.h, 0, 0, cssW, cssH);
+      }
+    });
+
+    this.trimVirtualCanvases(runs.length);
+    this.virtualRuns = runs;
+  }
+
+  private virtualCanvas(index: number): HTMLCanvasElement {
+    let canvas = this.virtualCanvases[index];
+    if (canvas) return canvas;
+    canvas = document.createElement('canvas');
+    Object.assign(canvas.style, {
+      position: 'absolute',
+      pointerEvents: 'none',
+      imageRendering: 'auto',
+    });
+    this.element.appendChild(canvas);
+    this.virtualCanvases[index] = canvas;
+    return canvas;
+  }
+
+  /** Drop the canvases past `count`, which the current scan has no run for. */
+  private trimVirtualCanvases(count: number): void {
+    for (const canvas of this.virtualCanvases.splice(count)) canvas.remove();
+  }
+
+  private clearVirtual(): void {
+    this.virtual.clear();
+    this.trimVirtualCanvases(0);
+    this.virtualRuns = [];
   }
 
   private renderPlacement(p: Placement, img: StoredImage): void {
@@ -744,6 +942,7 @@ export class KittyGraphics {
       if (img) this.renderPlacement(p, img);
       this.positionPlacement(p);
     }
+    this.scanVirtual();
   }
 
   // --- Delete ---------------------------------------------------------------
@@ -762,6 +961,7 @@ export class KittyGraphics {
           for (const image of this.images.values()) this.closeBitmap(image.bitmap);
           this.images.clear();
           this.idByNumber.clear();
+          this.clearVirtual();
           this.pixelSizes.clear();
         }
         break;
@@ -782,6 +982,7 @@ export class KittyGraphics {
           this.images.delete(id);
           this.pixelSizes.delete(id);
           this.forgetNumber(id);
+          if (this.virtual.delete(id)) this.scanVirtual();
         }
         break;
       }

@@ -39,11 +39,12 @@ export default defineConfig({
       },
     },
     {
-      // The chrome suite again at a doubled device pixel ratio. The frame is
-      // the one part of the package whose correctness is partly a question of
-      // where edges land on the device pixel grid, so it is checked at both.
+      // The chrome and placeholder suites again at a doubled device pixel
+      // ratio. Both are correct only if edges land where the cell grid puts
+      // them, and a fractional cell box rounds differently at each ratio, so
+      // they are checked at both.
       name: 'chromium-dpr2',
-      testMatch: /chrome\.spec\.mjs/,
+      testMatch: /(chrome|kitty-placeholders)\.spec\.mjs/,
       use: {
         baseURL: BASE_URL,
         deviceScaleFactor: 2,
