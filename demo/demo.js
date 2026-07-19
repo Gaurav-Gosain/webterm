@@ -88,11 +88,87 @@
     },
   };
 
+  // The terminal answers some sequences on the data channel: a kitty transmit
+  // is acknowledged with `ESC _ Gi=2;OK ESC \`, and a device query with a CSI
+  // reply. A real shell hands those to the program that asked for them. This
+  // one has nothing to hand them to, so it has to recognise the framing and
+  // drop the whole sequence; dropping only the bytes below 0x20 leaves the
+  // printable body to be echoed at the prompt.
+  //
+  // ECMA-48 framing, in the 7-bit forms a terminal actually sends:
+  //
+  //   CSI      ESC [ , parameters and intermediates 0x20-0x3f, final 0x40-0x7e
+  //   strings  ESC P (DCS), ESC X (SOS), ESC ] (OSC), ESC ^ (PM), ESC _ (APC),
+  //            each running to ST, which is the two characters ESC \. OSC also
+  //            ends at BEL, by the convention every terminal follows.
+  //   other    ESC, optional intermediates 0x20-0x2f, one final 0x30-0x7e
+  //
+  // The state is a field rather than a local because a reply can arrive split
+  // across two data events, and half a sequence must not fall out as text.
+  const STRING_OPENERS = 'P]X^_';
+
+  class EscapeFilter {
+    constructor() {
+      this.state = 'ground';
+      this.bel = false;
+    }
+
+    /** Yield the characters that survive: everything outside a sequence. */
+    *feed(data) {
+      for (const ch of data) {
+        switch (this.state) {
+          case 'ground':
+            if (ch === '\x1b') this.state = 'escape';
+            else yield ch;
+            break;
+
+          case 'escape':
+            if (ch === '[') {
+              this.state = 'csi';
+            } else if (STRING_OPENERS.includes(ch)) {
+              this.state = 'string';
+              this.bel = ch === ']';
+            } else if (ch === '\x1b') {
+              // A second ESC restarts the sequence rather than ending one.
+            } else if (ch >= ' ' && ch <= '/') {
+              this.state = 'intermediate';
+            } else {
+              // The final byte. A lone Escape keystroke lands here too and
+              // eats the next character, which is the same ambiguity a real
+              // terminal parser lives with.
+              this.state = 'ground';
+            }
+            break;
+
+          case 'intermediate':
+            if (!(ch >= ' ' && ch <= '/')) this.state = 'ground';
+            break;
+
+          case 'csi':
+            if (ch >= '@' && ch <= '~') this.state = 'ground';
+            break;
+
+          case 'string':
+            // ST is two characters, so an ESC only arms the terminator: any
+            // other character after it is still part of the string.
+            if (ch === '\x1b') this.state = 'stringEscape';
+            else if (this.bel && ch === '\x07') this.state = 'ground';
+            break;
+
+          case 'stringEscape':
+            this.state = ch === '\\' ? 'ground' : 'string';
+            break;
+        }
+      }
+    }
+  }
+
   class FakeShell {
     constructor(term, banner) {
       this.term = term;
       this.line = '';
       this.banner = banner;
+      this.escapes = new EscapeFilter();
       term.on('data', (bytes) => this.onInput(new TextDecoder().decode(bytes)));
     }
 
@@ -107,7 +183,7 @@
     }
 
     onInput(data) {
-      for (const ch of data) {
+      for (const ch of this.escapes.feed(data)) {
         if (ch === '\r') {
           this.term.write('\r\n');
           this.run(this.line.trim());
@@ -125,8 +201,9 @@
           this.prompt();
           continue;
         }
-        // Anything below 0x20 that is not handled above is a control sequence
-        // this shell has no meaning for, so it is dropped rather than printed.
+        // Escape sequences are already gone by here. What is left below 0x20
+        // is a bare control this shell has no meaning for, dropped rather
+        // than printed.
         if (ch < ' ') continue;
         this.line += ch;
         this.term.write(ch);
@@ -219,6 +296,23 @@
     };
   };
 
+  // The background select is filled before the first chromeOptions() call, not
+  // in bindControls() below: chromeOptions() reads its value, and an empty
+  // select reads as an empty string, so the frame would render without its
+  // stated default until the first change event.
+  function fillBackgrounds() {
+    const select = $('background');
+    for (const name of BACKGROUNDS) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      if (name === 'aurora') option.selected = true;
+      select.append(option);
+    }
+  }
+
+  fillBackgrounds();
+
   const chrome = createWindowChrome(chromeOptions());
   chrome.mount($('framed'));
 
@@ -243,15 +337,6 @@
   // --- Wiring ---------------------------------------------------------------
 
   function bindControls() {
-    const backgroundSelect = $('background');
-    for (const name of BACKGROUNDS) {
-      const option = document.createElement('option');
-      option.value = name;
-      option.textContent = name;
-      if (name === 'aurora') option.selected = true;
-      backgroundSelect.append(option);
-    }
-
     // update() rebuilds the frame without touching the slot's children, so the
     // open terminal survives every one of these.
     const rebuild = () => chrome.update(chromeOptions());

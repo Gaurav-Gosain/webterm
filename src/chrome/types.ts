@@ -83,7 +83,12 @@ export interface WindowChromeOptions {
   titleBar?: boolean;
   lights?: boolean | TrafficLightOptions;
   tabs?: ChromeTab[] | TabOptions;
-  /** Corner radius, any CSS length. Default 10px, the platform value. */
+  /**
+   * Corner radius, any CSS length. Default 14px. The platform rounds its
+   * windows considerably harder than it used to; 14 is where the current
+   * frame sits once the first release's exaggerated radius was pulled back.
+   * The tabs derive their own radius from this so the arcs stay concentric.
+   */
   radius?: string | number;
   shadow?: boolean | ChromeShadowOptions['size'] | ChromeShadowOptions;
   /** Decorative background behind the window. Default 'aurora'. */

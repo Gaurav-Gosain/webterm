@@ -221,6 +221,116 @@ test.describe('appearance', () => {
     }
   });
 
+  test('the frame is glass: the stage reaches the title bar', async ({ page }) => {
+    await boot(page, '?terminal=0&title=t&appearance=dark');
+
+    const filter = await page.$eval(
+      '.webterm-chrome-titlebar',
+      (node) => getComputedStyle(node).backdropFilter || getComputedStyle(node).webkitBackdropFilter,
+    );
+    expect(filter).toContain('blur');
+    expect(filter).toContain('saturate');
+
+    // The assertion that matters is not that the property is set but that the
+    // stage is visible through it: the same frame over two different
+    // backgrounds has to render two different title bars.
+    const sample = async (background) => {
+      await page.evaluate((b) => window.chrome_.update({ background: b }), background);
+      const bar = await page.locator('.webterm-chrome-titlebar').boundingBox();
+      return (
+        await page.screenshot({
+          clip: { x: bar.x + 8, y: bar.y + bar.height / 2, width: 6, height: 2 },
+        })
+      ).toString('base64');
+    };
+    expect(await sample('sunset')).not.toBe(await sample('ocean'));
+  });
+
+  test('the title holds its contrast over a light stage and a dark one', async ({ page }) => {
+    // Glass over a light background is where these designs fail, so the floor
+    // is asserted against the pixels behind the title rather than against the
+    // nominal colours, which say nothing once the stage shows through.
+    await boot(page, '?terminal=0&title=t');
+
+    const luminance = ([r, g, b]) => {
+      const lin = (c) => (c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    };
+
+    for (const [appearance, background] of [
+      ['light', 'mint'],
+      ['light', 'dawn'],
+      ['dark', 'sunset'],
+      ['dark', 'noir'],
+    ]) {
+      const measured = await page.evaluate(
+        async ([appearance, background]) => {
+          window.chrome_.update({ appearance, background });
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const style = getComputedStyle(document.querySelector('.webterm-chrome-title'));
+          return { color: style.color };
+        },
+        [appearance, background],
+      );
+
+      const bar = await page.locator('.webterm-chrome-titlebar').boundingBox();
+      const shot = await page.screenshot({
+        clip: { x: bar.x + bar.width / 2 - 120, y: bar.y + bar.height / 2 - 2, width: 20, height: 4 },
+      });
+      // Averaged in the page, where a canvas can decode the capture.
+      const glass = await page.evaluate(async (data) => {
+        const bitmap = await createImageBitmap(
+          new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], { type: 'image/png' }),
+        );
+        const canvas = new OffscreenCanvas(1, 1);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0, 1, 1);
+        return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      }, shot.toString('base64'));
+
+      const parts = measured.color.match(/[\d.]+/g).map(Number);
+      const alpha = parts[3] ?? 1;
+      const text = parts.slice(0, 3).map((c, i) => c * alpha + glass[i] * (1 - alpha));
+      const [hi, lo] = [luminance(text), luminance(glass)].sort((a, b) => b - a);
+      const contrast = (hi + 0.05) / (lo + 0.05);
+      expect(contrast, `${appearance} over ${background}`).toBeGreaterThan(4.5);
+    }
+  });
+
+  test('asking for more contrast turns the glass solid', async ({ page }) => {
+    // The reduced-transparency query is the other half of the same rule; this
+    // is the half the browser under test can be asked to report.
+    await page.emulateMedia({ contrast: 'more' });
+    await boot(page, '?terminal=0&title=t&appearance=dark&background=sunset');
+
+    const filter = await page.$eval(
+      '.webterm-chrome-titlebar',
+      (node) => getComputedStyle(node).backdropFilter || getComputedStyle(node).webkitBackdropFilter,
+    );
+    expect(filter).toBe('none');
+    // Opaque, so the stage behind it cannot change what the band looks like.
+    const alpha = await page.$eval('.webterm-chrome-titlebar', (node) => {
+      const parts = getComputedStyle(node).backgroundColor.match(/[\d.]+/g).map(Number);
+      return parts[3] ?? 1;
+    });
+    expect(alpha).toBe(1);
+  });
+
+  test('the tab corners are concentric with the window corner', async ({ page }) => {
+    await boot(page, '?terminal=0&tabs=one,two&radius=24');
+
+    const radii = await page.evaluate(() => ({
+      window: parseFloat(
+        getComputedStyle(document.querySelector('.webterm-chrome-window')).borderTopLeftRadius,
+      ),
+      tab: parseFloat(getComputedStyle(document.querySelector('.webterm-chrome-tab')).borderTopLeftRadius),
+      inset: parseFloat(getComputedStyle(document.querySelector('.webterm-chrome-tabs')).paddingTop),
+    }));
+    // Concentric means the inner arc is the outer one less the gap between
+    // them, not an independently chosen rounding.
+    expect(radii.tab).toBeCloseTo(radii.window - radii.inset, 1);
+  });
+
   test('reduced motion removes every transition', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await boot(page, '?terminal=0&tabs=one,two&tabsInteractive=1');

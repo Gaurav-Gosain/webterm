@@ -37,8 +37,13 @@ export function resolveBackground(background: ChromeBackground | undefined): str
 
   if (typeof background === 'string') {
     // A bare string is a preset name when it names one, and otherwise a CSS
-    // value, so `background: '#101014'` works without a wrapper object.
-    return isPreset(background) ? backgrounds[background] : background;
+    // value, so `background: '#101014'` works without a wrapper object. An
+    // empty string is neither: it paints nothing, which reads as the stage
+    // having been forgotten rather than as a deliberate choice, so it falls
+    // back to the default the same way undefined does. `'none'` is the way to
+    // ask for no background.
+    if (isPreset(background)) return backgrounds[background];
+    return background.trim() === '' ? backgrounds.aurora : background;
   }
 
   if ('preset' in background) return backgrounds[background.preset] ?? backgrounds.aurora;
