@@ -1,0 +1,65 @@
+{
+  "name": "webterm",
+  "version": "0.1.0",
+  "description": "An embeddable browser terminal built on xterm.js, with kitty graphics, a clipboard layer that works on insecure origins, and reference-checked unicode widths.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js"
+    },
+    "./css": "./dist/webterm.css",
+    "./webterm.css": "./dist/webterm.css",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:browser",
+    "test:unit": "node --test \"test/unit/*.test.ts\"",
+    "test:browser": "npm run build && playwright test",
+    "check": "npm run typecheck && npm run build && npm run test:unit",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "peerDependencies": {
+    "@xterm/addon-fit": ">=0.10.0",
+    "@xterm/xterm": "^5.5.0 || >=6.1.0-beta.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^22.10.0",
+    "@xterm/addon-canvas": "0.8.0-beta.48",
+    "@xterm/addon-fit": "0.12.0-beta.290",
+    "@xterm/addon-image": "0.10.0-beta.290",
+    "@xterm/addon-unicode-graphemes": "0.5.0-beta.290",
+    "@xterm/addon-web-links": "0.13.0-beta.290",
+    "@xterm/addon-webgl": "0.20.0-beta.289",
+    "@xterm/xterm": "6.1.0-beta.290",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "terminal",
+    "xterm",
+    "kitty-graphics",
+    "websocket",
+    "webtransport",
+    "pty"
+  ]
+}
