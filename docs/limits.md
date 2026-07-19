@@ -10,6 +10,20 @@ The peer range is `^5.5.0 || >=6.1.0-beta.0`, and the `^5.5.0` half is optimisti
 
 Two shapes of the API are handled. Older builds take the identifier as a number and hand the callback the payload including the ident byte; current builds take an `IFunctionIdentifier` (`{ final: 'G' }`) and strip the ident first. `splitApc` tolerates both.
 
+## Nothing answers the window-size report, so `kitten icat` will not send an image
+
+The kitty graphics protocol sizes an image in cells, so a sender has to know how large a cell is in pixels before it can transmit anything. It asks with `CSI 14 t` (window size in pixels) and `CSI 16 t` (cell size in pixels). xterm.js implements neither, and this package registers no handler for them, so both queries go unanswered.
+
+`WebTerm.pixelSize` returns the real figure and the `resize` event carries it, but that is the page's copy, not the terminal's reply to the application. The consequence is not degraded output, it is no output: `kitten icat` prints
+
+```
+Error: Terminal does not support reporting screen sizes in pixels, use a terminal such as kitty, WezTerm, Konsole, etc. that does.
+```
+
+and exits without sending a byte, and `kitten icat --print-window-size` reports `0x0`. Everything downstream of that point works: pass the geometry in with kitten's own `--use-window-size <cols>,<rows>,<width>,<height>` and the `a=q` probe is answered, transfer settles on stream mode, and the image is placed. `scripts/capture/capture.mjs` does exactly that to produce the graphics figure in the README, and asserts a placement landed rather than shipping a picture of an empty terminal.
+
+A fix belongs in this package: register a CSI handler for `14 t` and `16 t` that replies from `pixelSize` and the measured cell box. It is not written yet.
+
 ## The kitty keyboard protocol is not available at all
 
 xterm.js does not implement it, and nothing in this package can add it, because the encoding happens inside xterm's own key handler rather than anywhere a wrapper can intercept. An application that asks for progressive enhancement (`CSI > 1 u`) gets legacy encodings, so a disambiguated Ctrl+I and Tab, or a key release event, are not obtainable here.

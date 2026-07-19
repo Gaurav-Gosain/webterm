@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webterm capture fixture</title>
+    <link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/dist/webterm.css" />
+    <link rel="stylesheet" href="/dist/chrome.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+      /* Each shot mounts into #stage, sized by the capture script. */
+      #stage {
+        display: grid;
+      }
+      .cell {
+        position: relative;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The capture page for docs/images. It drives the built ESM bundle in dist,
+      the same files a consumer installs, so an asset can never show a feature
+      that only exists in src. Every shot is described by a JSON spec the
+      capture script passes in; nothing about the layout is decided here.
+    -->
+    <div id="stage"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "@xterm/xterm": "/node_modules/@xterm/xterm/lib/xterm.mjs",
+          "@xterm/addon-fit": "/node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+          "@xterm/addon-webgl": "/node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs",
+          "@xterm/addon-canvas": "/node_modules/@xterm/addon-canvas/lib/xterm-addon-canvas.mjs",
+          "@xterm/addon-image": "/node_modules/@xterm/addon-image/lib/addon-image.mjs",
+          "@xterm/addon-web-links": "/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs"
+        }
+      }
+    </script>
+    <script type="module">
+      import { WebTerm } from '/dist/index.js';
+      import { createWindowChrome } from '/dist/chrome/index.js';
+
+      const decoder = new TextDecoder();
+
+      // Terminals by cell index, so the capture script can write into a
+      // specific window of a multi-window shot.
+      const terms = [];
+      // Bytes each terminal has sent back, drained by the PTY bridge.
+      const outbound = [];
+
+      /**
+       * Build one shot.
+       *
+       * spec: {
+       *   grid:  { columns, cellWidth, cellHeight },
+       *   cells: [{ chrome, term }]
+       * }
+       */
+      window.build = async (spec) => {
+        const stage = document.getElementById('stage');
+        stage.textContent = '';
+        terms.length = 0;
+        outbound.length = 0;
+
+        const grid = spec.grid ?? {};
+        stage.style.gridTemplateColumns = `repeat(${grid.columns ?? 1}, ${grid.cellWidth}px)`;
+        stage.style.width = `${(grid.columns ?? 1) * grid.cellWidth}px`;
+
+        for (const [index, cellSpec] of spec.cells.entries()) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.style.width = `${grid.cellWidth}px`;
+          cell.style.height = `${grid.cellHeight}px`;
+          stage.appendChild(cell);
+
+          const chrome = createWindowChrome(cellSpec.chrome ?? {});
+          chrome.mount(cell);
+
+          const host = document.createElement('div');
+          host.className = 'webterm';
+          host.style.width = '100%';
+          host.style.height = '100%';
+          chrome.content.appendChild(host);
+
+          const term = new WebTerm(cellSpec.term ?? {});
+          const sent = [];
+          term.on('data', (bytes) => sent.push(bytes));
+          await term.open(host);
+          terms.push(term);
+          outbound.push(sent);
+          void index;
+        }
+
+        window.ready = true;
+        return terms.map((t) => ({ cols: t.cols, rows: t.rows }));
+      };
+
+      /** Write base64-encoded bytes into terminal `index`. */
+      window.feed = (index, base64) => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        terms[index].write(bytes);
+      };
+
+      /** Drain and return whatever the terminal has replied with, base64. */
+      window.drain = (index) => {
+        const chunks = outbound[index].splice(0, outbound[index].length);
+        if (!chunks.length) return '';
+        let total = 0;
+        for (const chunk of chunks) total += chunk.length;
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+        let binary = '';
+        for (const byte of merged) binary += String.fromCharCode(byte);
+        return btoa(binary);
+      };
+
+      /** The rendered grid size of terminal `index`, in CSS pixels. */
+      window.pixelSize = (index) => terms[index].pixelSize;
+
+      /** Number of kitty placements currently in the overlay of terminal `index`. */
+      window.placements = (index) => terms[index].kitty?.placementCount ?? 0;
+
+      window.settle = () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 60))),
+        );
+
+      void decoder;
+      window.fixtureLoaded = true;
+    </script>
+  </body>
+</html>

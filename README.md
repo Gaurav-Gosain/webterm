@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/banner.png" alt="webterm: a small, embeddable browser terminal with kitty graphics and optional window chrome" width="100%">
+</p>
+
 # webterm
 
 A small, embeddable browser terminal built on xterm.js.
@@ -6,11 +10,38 @@ You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are 
 
 It is built to be taken apart. Transports are a three-method interface the package never looks inside; the clipboard write path, the unicode width table and the renderer choice are each one option; the underlying `Terminal` is public as `term.xterm`; and the window chrome is a separate entry point that imports nothing from the terminal, so a page that wants a frame around a code block does not download an emulator to get one.
 
+## What it looks like
+
+Every image below is the built package in a real browser: the terminals are real `WebTerm` instances, the text in them is the output of a real program on a real pty, and the inline picture is what `kitten icat` actually transmitted. Regenerate them with `node scripts/capture/capture.mjs` after a build.
+
+<table>
+  <tr>
+    <td colspan="2"><img src="docs/images/chrome-presets.png" alt="nine terminals, each in a macOS-style frame over a different decorative background, alternating light and dark frames, all listing the same directory"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>the nine background presets, light and dark frames alternating, a real terminal in each</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/chrome-tabs.png" alt="btop running full-screen in a framed terminal with traffic lights and three tabs, drawing box-drawing panels, block graphs and colored gauges"></td>
+    <td><img src="docs/images/kitty-graphics.png" alt="a terminal showing a kitten icat command line and, below it, the banner image drawn inline over the grid with the shell prompt resuming underneath"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>btop on the alternate screen, with tabs and traffic lights</sub></td>
+    <td align="center"><sub>kitten icat, transmitted in stream mode after webterm answered its capability probe</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/chrome-light.png" alt="a light macOS-style frame with a left-aligned title, holding a terminal showing syntax-highlighted TypeScript from bat"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>light appearance, left-aligned title, no tabs</sub></td>
+  </tr>
+</table>
+
 ## What it does
 
 - Renders the kitty graphics protocol as absolutely positioned DOM canvases in a layer above the grid, rather than baking placements into the cell buffer as `@xterm/addon-image` does, so a placement can be moved, refreshed and deleted individually.
 - Implements the kitty actions `a=t`, `a=T`, `a=p`, `a=d` and `a=q`; direct base64 transmission (`t=d`); formats 24 (RGB), 32 (RGBA) and 100 (PNG, decoded through `createImageBitmap`); zlib payloads (`o=z`) through `DecompressionStream`; chunked transmission (`m=1`); and deletion by image id or placement id.
-- Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout and refusing to send the image at all.
+- Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout. It does not get that far unprompted: nothing here answers the `CSI 14 t` window-size report either, so icat has to be given the geometry with `--use-window-size`. See [docs/limits.md](docs/limits.md).
 - Repositions every placement on scroll, resize and font change, and anchors it either to the buffer row that introduced it (`scrollback`, the default) or to the visible grid (`viewport`, for a compositor that re-emits its placements each frame).
 - Moves the cursor past a placement as the protocol requires, right by its columns and down by its rows unless the sender asks for `C=1`, so the cells an image covers are consumed in the buffer rather than only painted over. `kitten icat` emits nothing but a trailing CR LF of its own and relies on the terminal for the rest.
 - Handles OSC 52 clipboard writes, which xterm.js registers no handler for, and decodes the payload as UTF-8 rather than as the Latin-1 string `atob` hands back.
@@ -435,6 +466,8 @@ npm install && npm run build
 xdg-open demo/index.html
 ```
 
+`scripts/capture/capture.mjs` regenerates the images above, and `scripts/banner/` the header. Both drive `dist`, so neither can show a feature that only exists in `src`.
+
 `examples/` has three, smallest first: [`script-tag/`](examples/script-tag) (no build step at all), [`bundler/`](examples/bundler) (ESM with types) and [`websocket-transport/`](examples/websocket-transport) (a real server, with the shipped transport, the fallback and reconnect combinators, and a hand-written transport for a protocol with its own framing).
 
 ## Extending
@@ -456,6 +489,7 @@ See [docs/architecture.md](docs/architecture.md) for what each module owns, [doc
 The short version; the full one is [docs/limits.md](docs/limits.md).
 
 - Kitty graphics need `term.parser.registerApcHandler`, which is absent from `@xterm/xterm` 5.5.0 and from 6.0.0, the current stable. Only the `6.1.0-beta.*` line has it. The overlay feature-detects and warns rather than throwing.
+- Nothing answers the `CSI 14 t` and `CSI 16 t` window-size reports, so `kitten icat` refuses to send an image until it is given the geometry with `--use-window-size`. Fixable here, and not yet fixed.
 - The kitty keyboard protocol is not available at all, because the encoding happens inside xterm's own key handler.
 - Both atlas renderers floor the device cell width, upstream, so a fractional advance loses a fraction of a device pixel per cell at a device pixel ratio above 1.
 - Reserved key capture works only in fullscreen, because that is the only state `navigator.keyboard.lock` is granted in.
