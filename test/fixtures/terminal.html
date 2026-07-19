@@ -46,7 +46,10 @@
         fontFamily: params.get('font') ?? 'monospace',
         fontSize: Number(params.get('fontSize') ?? 14),
         renderer: { prefer: params.get('renderer') ?? 'auto' },
-        graphics: { kitty: { anchor: params.get('anchor') ?? 'scrollback' } },
+        graphics: {
+          kitty: { anchor: params.get('anchor') ?? 'scrollback' },
+          sixel: params.get('sixel') === '1',
+        },
         clipboard: { copyOnSelect: params.get('copyOnSelect') === '1' },
       };
       if (params.get('cols') && params.get('rows')) {
