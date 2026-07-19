@@ -164,6 +164,27 @@ function region(grid, cell, part = {}) {
   };
 }
 
+/**
+ * Fail with one clear sentence when the build under test predates unicode
+ * placeholder support, rather than letting every assertion die on a missing
+ * property. The suite is only meaningful against a build that has it.
+ */
+async function requirePlaceholderSupport(page) {
+  const state = await page.evaluate(() => {
+    const kitty = window.term.kitty;
+    if (!kitty) return 'no kitty overlay: graphics.kitty is off or unsupported by this xterm';
+    if (!Array.isArray(kitty.virtualRuns)) {
+      return 'the kitty overlay has no virtualRuns, so this build has no unicode placeholder support';
+    }
+    return null;
+  });
+  expect(
+    state,
+    `${state}. The page loads /dist/index.js over http, so this is what the ` +
+      `fixture server served rather than what the source tree contains.`,
+  ).toBe(null);
+}
+
 /** Write a sequence and let the overlay settle. */
 async function write(page, sequence) {
   await page.evaluate(async (data) => {
@@ -183,6 +204,7 @@ test('an image in unicode placeholder mode covers every cell of the reserved gri
   page,
 }) => {
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   await write(
     page,
     `\x1b[2J\x1b[H${transmitVirtual(GRID)}${placeholderGrid(GRID)}`,
@@ -233,6 +255,7 @@ test('the reserved grid is covered when it is flush against the right edge', asy
   // The last column of the screen is where a floored width loses its column
   // silently: there is no column after it to spill into.
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const grid = { cols: 20, rows: 6, originRow: 4, originCol: 80 };
   await write(page, `\x1b[2J\x1b[H${transmitVirtual(grid)}${placeholderGrid(grid)}`);
 
@@ -243,6 +266,7 @@ test('the reserved grid is covered when it is flush against the right edge', asy
 
 test('the bottom row and the left column of the reserved grid are covered', async ({ page }) => {
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const grid = { cols: 24, rows: 8, originRow: 0, originCol: 0 };
   await write(page, `\x1b[2J\x1b[H${transmitVirtual(grid)}${placeholderGrid(grid)}`);
 
@@ -269,6 +293,7 @@ test('a placeholder grid written before its image arrives is covered once it doe
   // when the preview changes, so the grid routinely exists on screen before
   // the bytes for it do.
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const grid = { cols: 18, rows: 5, originRow: 3, originCol: 10 };
 
   await page.evaluate(async (data) => {
@@ -287,6 +312,7 @@ test('a placeholder grid whose image never arrives draws nothing at all', async 
   // that leaves it to the text renderer fills the grid with tofu whenever the
   // image is missing, evicted or still in flight.
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const grid = { cols: 16, rows: 4, originRow: 6, originCol: 12 };
   await page.evaluate(async (data) => {
     window.term.write(data);
@@ -303,6 +329,7 @@ test('a virtual placement does not move the cursor', async ({ page }) => {
   // U=1 is explicit that the placement is virtual: the cursor stays put and
   // the application decides where the grid goes.
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const before = await page.evaluate(() => {
     window.term.write('\x1b[2J\x1b[10;20H');
     return window.term.flush().then(() => ({
@@ -323,6 +350,7 @@ test('a virtual placement does not move the cursor', async ({ page }) => {
 
 test('the grid scrolls with its text and stays covered', async ({ page }) => {
   await boot(page, '?cols=100&rows=30');
+  await requirePlaceholderSupport(page);
   const grid = { cols: 20, rows: 6, originRow: 20, originCol: 4 };
   await write(page, `\x1b[2J\x1b[H${transmitVirtual(grid)}${placeholderGrid(grid)}`);
 

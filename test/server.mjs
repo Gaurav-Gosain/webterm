@@ -6,10 +6,9 @@
 // a failed run from leaving a process behind.
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize } from 'node:path';
 
-const ROOT = resolve(import.meta.dirname, '..');
-const PORT = Number(process.env.WEBTERM_TEST_PORT ?? 7811);
+import { PORT, ROOT } from './port.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -27,6 +26,15 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === '/') pathname = '/test/fixtures/terminal.html';
+
+  // Which checkout this server is serving. A run that reaches a server started
+  // from a different worktree loads that worktree's dist/ and fails on code it
+  // does not have, so every boot checks this before it trusts the page.
+  if (pathname === '/__root') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ root: ROOT }));
+    return;
+  }
 
   // Contain every request inside the package directory.
   const target = join(ROOT, normalize(pathname).replace(/^(\.\.[/\\])+/, ''));

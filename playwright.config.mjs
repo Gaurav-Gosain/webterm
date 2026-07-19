@@ -9,9 +9,10 @@
 // which Playwright owns and tears down.
 import { defineConfig } from '@playwright/test';
 
+import { BASE_URL, PORT } from './test/port.mjs';
+
 const CHROMIUM = process.env.WEBTERM_CHROMIUM ?? '/usr/bin/chromium';
-export const PORT = process.env.WEBTERM_TEST_PORT ?? '7811';
-export const BASE_URL = `http://127.0.0.1:${PORT}`;
+export { BASE_URL, PORT };
 
 export default defineConfig({
   testDir: './test/browser',
@@ -64,7 +65,13 @@ export default defineConfig({
   webServer: {
     command: `node test/server.mjs`,
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse. A reused server is only the right server if it was started
+    // from this same directory, and when it was not the run loads a foreign
+    // build and fails on code the tree does not contain. The port is derived
+    // per checkout so concurrent worktrees do not collide in the first place;
+    // if one somehow does, failing to start is the loud answer and reusing is
+    // the silent wrong one.
+    reuseExistingServer: false,
     timeout: 30_000,
     stdout: 'ignore',
     stderr: 'pipe',
