@@ -374,6 +374,343 @@ test('disposing removes the overlay from the container', async ({ page }) => {
   expect(after.after).toBe(0);
 });
 
+// --- cursor advance and cell reservation -----------------------------------
+//
+// The protocol: "After placing an image on the screen the cursor must be moved
+// to the right by the number of cols in the image placement rectangle and down
+// by the number of rows". kitten icat depends on it entirely, emitting only a
+// trailing CR LF of its own, so a terminal that skips it draws the next prompt
+// straight through the image. These assert the cell buffer, not the canvas.
+
+/** The cell box the overlay sizes placements against. */
+async function cellBox(page) {
+  return page.evaluate(() => {
+    const cell = window.term.xterm._core._renderService.dimensions.css.cell;
+    return { width: cell.width, height: cell.height };
+  });
+}
+
+test('placing an image advances the cursor past it, in rows and columns', async ({ page }) => {
+  await boot(page);
+  const cell = await cellBox(page);
+  const [w, h] = [200, 120];
+
+  const result = await page.evaluate(async (sequence) => {
+    const buf = () => window.term.xterm.buffer.active;
+    window.term.write('\x1b[5;3H');
+    await window.term.flush();
+    const before = { y: buf().cursorY, x: buf().cursorX };
+    window.term.write(sequence);
+    await window.term.flush();
+    return { before, after: { y: buf().cursorY, x: buf().cursorX } };
+  }, transmitAndPlace(20, w, h, [10, 120, 200]));
+
+  // Derived from the transmitted pixels against the cell box: the sender sent
+  // no c or r, exactly as icat does.
+  const rows = Math.ceil(h / cell.height);
+  const cols = Math.ceil(w / cell.width);
+  expect(result.after.y - result.before.y).toBe(rows);
+  expect(result.after.x - result.before.x).toBe(cols);
+});
+
+test('the rows an image occupies are consumed, so following text lands below it', async ({
+  page,
+}) => {
+  // The maintainer's case, reduced: icat emits CR, a column offset, the image,
+  // then CR LF, and the shell prompt follows in the same stream. Before the
+  // fix the prompt was written straight over the image.
+  await boot(page);
+  const cell = await cellBox(page);
+  const [w, h] = [160, 100];
+  const rows = Math.ceil(h / cell.height);
+
+  const result = await page.evaluate(async (sequence) => {
+    const buf = () => window.term.xterm.buffer.active;
+    window.term.write('\x1b[1;1H');
+    await window.term.flush();
+    // One chunk, as it arrives from the pty: image then CR LF then the prompt.
+    window.term.write(`\r\x1b[10C${sequence}\r\nPROMPT$ `);
+    await window.term.flush();
+    const lines = [];
+    for (let i = 0; i < 12; i++) lines.push(buf().getLine(i)?.translateToString(true) ?? '');
+    return { lines, cursorY: buf().cursorY };
+  }, transmitAndPlace(21, w, h, [200, 30, 30]));
+
+  // The prompt is below the image, and every row the image covers is untouched.
+  const promptRow = result.lines.findIndex((l) => l.startsWith('PROMPT$'));
+  expect(promptRow).toBeGreaterThan(rows - 1);
+  for (let i = 0; i < rows; i++) expect(result.lines[i]).toBe('');
+});
+
+test('C=1 places the image without moving the cursor', async ({ page }) => {
+  await boot(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const buf = () => window.term.xterm.buffer.active;
+    window.term.write('\x1b[4;7H');
+    await window.term.flush();
+    const before = { y: buf().cursorY, x: buf().cursorX };
+    window.term.write(sequence);
+    await window.term.flush();
+    const after = { y: buf().cursorY, x: buf().cursorX };
+    // The decode is asynchronous, so the canvas lands after the cursor check.
+    await new Promise((r) => setTimeout(r, 300));
+    return { before, after, placements: window.term.kitty.placementCount };
+  }, transmitAndPlace(22, 120, 80, [0, 180, 90], 'C=1'));
+
+  expect(result.after).toEqual(result.before);
+  expect(result.placements).toBe(1);
+});
+
+test('explicit r and c drive the advance rather than the pixel size', async ({ page }) => {
+  await boot(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const buf = () => window.term.xterm.buffer.active;
+    window.term.write('\x1b[2;1H');
+    await window.term.flush();
+    const before = buf().cursorY;
+    window.term.write(sequence);
+    await window.term.flush();
+    return { advanced: buf().cursorY - before, x: buf().cursorX };
+  }, transmitAndPlace(23, 300, 300, [80, 80, 200], 'c=7,r=4'));
+
+  expect(result.advanced).toBe(4);
+  expect(result.x).toBe(7);
+});
+
+test('with only c given the rows follow the aspect ratio', async ({ page }) => {
+  await boot(page);
+  const cell = await cellBox(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const buf = () => window.term.xterm.buffer.active;
+    window.term.write('\x1b[2;1H');
+    await window.term.flush();
+    const before = buf().cursorY;
+    window.term.write(sequence);
+    await window.term.flush();
+    return buf().cursorY - before;
+  }, transmitAndPlace(24, 200, 100, [30, 30, 30], 'c=10'));
+
+  // 10 cols wide, so the height is 10 cells of width times the 100/200 ratio.
+  const expected = Math.max(1, Math.round((10 * cell.width * 100) / (200 * cell.height)));
+  expect(result).toBe(expected);
+});
+
+test('a second image lands below the first rather than overlapping it', async ({ page }) => {
+  await boot(page);
+
+  const boxes = await page.evaluate(
+    async ({ first, second }) => {
+      window.term.write('\x1b[1;1H');
+      await window.term.flush();
+      window.term.write(first);
+      await window.term.flush();
+      // A carriage return, then the next image, as a shell running two icats
+      // in sequence produces.
+      window.term.write(`\r${second}`);
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 300));
+      return [...document.querySelectorAll('.webterm-kitty-overlay canvas')].map((c) => {
+        const y = Number(/translate\([^,]+,\s*([-\d.]+)px\)/.exec(c.style.transform)[1]);
+        return { y, height: parseFloat(c.style.height) };
+      });
+    },
+    {
+      first: transmitAndPlace(25, 120, 90, [255, 0, 0]),
+      second: transmitAndPlace(26, 120, 90, [0, 0, 255]),
+    },
+  );
+
+  expect(boxes).toHaveLength(2);
+  const [a, b] = boxes.sort((p, q) => p.y - q.y);
+  expect(b.y).toBeGreaterThanOrEqual(a.y + a.height);
+});
+
+test('an image placed at the bottom scrolls the viewport and travels with its text', async ({
+  page,
+}) => {
+  await boot(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const xterm = window.term.xterm;
+    // Park the cursor on the last row, so the placement has to scroll.
+    window.term.write('\x1b[999;1H');
+    await window.term.flush();
+    const baseBefore = xterm.buffer.active.baseY;
+
+    window.term.write(sequence);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+
+    const canvas = document.querySelector('.webterm-kitty-overlay canvas');
+    const readY = () => Number(/translate\([^,]+,\s*([-\d.]+)px\)/.exec(canvas.style.transform)[1]);
+    const settled = readY();
+
+    // Now push it up with more text; it must move up by the same amount.
+    window.term.write('\r\n\r\n\r\n');
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+
+    return {
+      scrolled: xterm.buffer.active.baseY - baseBefore,
+      settled,
+      afterMoreText: readY(),
+      rows: xterm.rows,
+    };
+  }, transmitAndPlace(27, 160, 100, [12, 200, 12]));
+
+  // The placement scrolled the screen rather than being clipped at the bottom.
+  expect(result.scrolled).toBeGreaterThan(0);
+  // And it kept moving up as text pushed it, rather than staying pinned.
+  expect(result.afterMoreText).toBeLessThan(result.settled);
+});
+
+test('scrolling up into scrollback and back returns the image to its row', async ({ page }) => {
+  await boot(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const xterm = window.term.xterm;
+    window.term.write(sequence);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const canvas = document.querySelector('.webterm-kitty-overlay canvas');
+    const readY = () => Number(/translate\([^,]+,\s*([-\d.]+)px\)/.exec(canvas.style.transform)[1]);
+    const atRest = readY();
+
+    // Push it into scrollback, then scroll back up to it.
+    window.term.write('\r\n'.repeat(xterm.rows + 5));
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const pushedAway = readY();
+
+    xterm.scrollToTop();
+    await new Promise((r) => setTimeout(r, 300));
+    const scrolledUp = { y: readY(), display: canvas.style.display };
+
+    xterm.scrollToBottom();
+    await new Promise((r) => setTimeout(r, 300));
+    return { atRest, pushedAway, scrolledUp, backDown: readY() };
+  }, transmitAndPlace(28, 120, 90, [220, 220, 40]));
+
+  // It moved up as the text scrolled, came back into view on scrollback, and
+  // returned to where it was when the viewport came back down.
+  expect(result.pushedAway).toBeLessThan(result.atRest);
+  expect(result.scrolledUp.display).toBe('block');
+  expect(result.scrolledUp.y).toBeGreaterThanOrEqual(0);
+  expect(result.backDown).toBe(result.pushedAway);
+});
+
+test('a placement is dropped once its row falls out of the scrollback', async ({ page }) => {
+  // A bare absolute row cannot survive this: once the scrollback saturates,
+  // xterm trims lines off the top and every stored row silently drifts by the
+  // trim count, so the canvas would sit against unrelated text forever. The
+  // placement is anchored to a marker, which xterm keeps correct and disposes
+  // with its line.
+  await boot(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const xterm = window.term.xterm;
+    xterm.options.scrollback = 20;
+    window.term.write(sequence);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const placed = window.term.kitty.placementCount;
+
+    // Well past the scrollback, so the anchoring line is trimmed away.
+    window.term.write('\r\n'.repeat(xterm.rows + 200));
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 400));
+    return {
+      placed,
+      after: window.term.kitty.placementCount,
+      canvases: document.querySelectorAll('.webterm-kitty-overlay canvas').length,
+    };
+  }, transmitAndPlace(32, 96, 72, [140, 20, 140]));
+
+  expect(result.placed).toBe(1);
+  expect(result.after).toBe(0);
+  expect(result.canvases).toBe(0);
+});
+
+test('a clear screen drops the placements, a partial erase does not', async ({ page }) => {
+  // "The clear screen escape code (usually <ESC>[2J) should also clear all
+  // images. This is so that the clear command works." The partial erases must
+  // leave graphics alone.
+  await boot(page);
+
+  const result = await page.evaluate(async ({ a, b }) => {
+    window.term.write(a);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const placed = window.term.kitty.placementCount;
+
+    window.term.write('\x1b[0J');
+    await window.term.flush();
+    const afterPartial = window.term.kitty.placementCount;
+
+    window.term.write('\x1b[2J');
+    await window.term.flush();
+    const afterClear = window.term.kitty.placementCount;
+
+    // The image data survived the clear, so a re-place still works.
+    window.term.write(b);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 200));
+    return { placed, afterPartial, afterClear, replaced: window.term.kitty.placementCount };
+  }, { a: transmitAndPlace(29, 64, 64, [5, 5, 200]), b: apc('a=p,i=29') });
+
+  expect(result.placed).toBe(1);
+  expect(result.afterPartial).toBe(1);
+  expect(result.afterClear).toBe(0);
+  expect(result.replaced).toBe(1);
+});
+
+test('the alternate screen hides main screen images and discards its own', async ({ page }) => {
+  await boot(page);
+
+  const result = await page.evaluate(
+    async ({ main, alt }) => {
+      window.term.write(main);
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 300));
+      const canvas = document.querySelector('.webterm-kitty-overlay canvas');
+
+      // Into the alternate screen: the main screen's image must not be painted
+      // over a full-screen application.
+      window.term.write('\x1b[?1049h');
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 200));
+      const hiddenOnAlt = canvas.style.display;
+
+      // An image placed on the alternate screen belongs to it.
+      window.term.write(alt);
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 300));
+      const onAlt = window.term.kitty.placementCount;
+
+      window.term.write('\x1b[?1049l');
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 200));
+      return {
+        hiddenOnAlt,
+        onAlt,
+        backOnMain: window.term.kitty.placementCount,
+        visibleAgain: canvas.style.display,
+      };
+    },
+    { main: transmitAndPlace(30, 96, 72, [200, 100, 0]), alt: transmitAndPlace(31, 96, 72, [0, 100, 200]) },
+  );
+
+  expect(result.hiddenOnAlt).toBe('none');
+  expect(result.onAlt).toBe(2);
+  // Leaving the alternate screen discards what was placed on it, and restores
+  // what was placed on the main screen.
+  expect(result.backOnMain).toBe(1);
+  expect(result.visibleAgain).toBe('block');
+});
+
 // --- capability probes -----------------------------------------------------
 //
 // Kitty graphics is request/response for detection: a client emits a=q probes

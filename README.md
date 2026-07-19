@@ -12,6 +12,7 @@ It is built to be taken apart. Transports are a three-method interface the packa
 - Implements the kitty actions `a=t`, `a=T`, `a=p`, `a=d` and `a=q`; direct base64 transmission (`t=d`); formats 24 (RGB), 32 (RGBA) and 100 (PNG, decoded through `createImageBitmap`); zlib payloads (`o=z`) through `DecompressionStream`; chunked transmission (`m=1`); and deletion by image id or placement id.
 - Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout and refusing to send the image at all.
 - Repositions every placement on scroll, resize and font change, and anchors it either to the buffer row that introduced it (`scrollback`, the default) or to the visible grid (`viewport`, for a compositor that re-emits its placements each frame).
+- Moves the cursor past a placement as the protocol requires, right by its columns and down by its rows unless the sender asks for `C=1`, so the cells an image covers are consumed in the buffer rather than only painted over. `kitten icat` emits nothing but a trailing CR LF of its own and relies on the terminal for the rest.
 - Handles OSC 52 clipboard writes, which xterm.js registers no handler for, and decodes the payload as UTF-8 rather than as the Latin-1 string `atob` hands back.
 - Falls back to a hidden textarea and `document.execCommand('copy')` where `navigator.clipboard` is absent, which is every non-secure context: a LAN IP, an http reverse proxy, any deployment without TLS that is not localhost.
 - Retries a clipboard write refused for want of a user gesture on the next `pointerdown` or `keydown`, once, and reports `written: false` when every strategy was refused rather than failing silently.
@@ -328,7 +329,15 @@ Kitty graphics is request and response for detection. A client emits `a=q` probe
 new WebTerm({ graphics: { kitty: { anchor: 'scrollback', storageLimit: 128 } } });
 ```
 
-`scrollback` is the default and anchors a placement to the buffer row that introduced it, so the image scrolls away with its text. That is what a shell running an image viewer expects. `viewport` pins a placement to the visible grid instead, which is what a compositor that re-emits every placement each frame needs: under `scrollback`, any newline it emitted would advance the buffer base and park the image in scrollback history. `storageLimit` caps the decoded bitmaps retained before the least recently used is evicted, and an image with a live placement is never a candidate.
+`scrollback` is the default and anchors a placement to the buffer row that introduced it, so the image scrolls away with its text. That is what a shell running an image viewer expects, and it is the right choice for a full-screen application too: the alternate screen has no scrollback, so there the anchoring row and the screen row are the same row. `viewport` pins a placement to the visible grid instead, for an inline compositor on the main screen that re-emits every placement each frame and would otherwise park images in scrollback history with its own newlines. `storageLimit` caps the decoded bitmaps retained before the least recently used is evicted, and an image with a live placement is never a candidate.
+
+Under `scrollback` a placement is held by an xterm marker rather than a plain row number, so it stays on its line as the scrollback fills and trims, and is dropped once that line is trimmed out of history. Placements belong to the screen they were made on: the alternate screen hides the main screen's images while it is up, and discards its own on the way out, as the protocol requires. `ESC[2J` clears placements, while the partial erases leave them alone.
+
+### Cursor movement
+
+After a placement the cursor moves right by the placement's columns and down by its rows, scrolling the screen at the bottom exactly as text does. `C=1` suppresses it, and a virtual (`U=1`) or relative (`P`) placement never moves the cursor. The rectangle comes from `c` and `r` when the sender gives them, from one of them plus the source aspect ratio when only one is given, and otherwise from the transmitted pixel dimensions measured against the current cell box, which is the case `kitten icat` exercises.
+
+The movement is applied through xterm's input handler at the point in the stream where the placement was parsed, not queued with `term.write`. A write issued from inside a parser callback is appended to the write buffer and parsed after the remainder of the current chunk, and the bytes that follow an image, including icat's trailing CR LF and the next shell prompt, are in that same chunk.
 
 ## Clipboard
 

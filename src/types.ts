@@ -48,9 +48,11 @@ export interface UnicodeOptions {
 export interface KittyOptions {
   /**
    * 'scrollback' anchors a placement to its buffer row so it scrolls away with
-   * the text, which is what a shell running chafa expects. 'viewport' pins it
-   * to the visible grid, which is what a compositor that re-emits its
-   * placements every frame needs. Default 'scrollback'.
+   * the text, which is what a shell running chafa expects. It suits a
+   * full-screen application too, since the alternate screen has no scrollback
+   * and the anchoring row is the screen row there. 'viewport' pins a placement
+   * to the visible grid, for an inline compositor on the main screen that
+   * re-emits its placements every frame. Default 'scrollback'.
    */
   anchor?: 'scrollback' | 'viewport';
   /** Decoded bitmaps retained before the least recently used is evicted. Default 128. */

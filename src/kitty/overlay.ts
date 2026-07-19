@@ -13,6 +13,12 @@
  *   - Source-region clipping (x,y,w,h) through drawImage arguments.
  *   - Track scroll, resize and font change, and reposition everything live.
  *
+ * Placements are anchored to a buffer row through an xterm marker, so they
+ * scroll with their text, survive scrollback trimming and are dropped when the
+ * row they belong to falls out of history. After a placement the cursor is
+ * moved past the image as the protocol requires, so the cells it covers are
+ * genuinely consumed in the buffer rather than only painted over.
+ *
  * Supported subset:
  *
  *   Actions:  a=t, a=T, a=p, a=d, a=q
@@ -30,7 +36,7 @@
  *     re-encodes them into direct transmissions before they reach the page.
  *   - Unicode placeholder placement (U=1)
  */
-import type { Terminal } from '@xterm/xterm';
+import type { IMarker, Terminal } from '@xterm/xterm';
 import type { KittyOptions } from '../types.js';
 import {
   KITTY_APC_IDENT,
@@ -43,6 +49,18 @@ import {
   type KittyCommand,
 } from './protocol.js';
 
+/**
+ * The slice of xterm's private input handler the cursor advance drives.
+ *
+ * `lineFeed` is the same entry point the parser uses for a `\n`, so it scrolls
+ * at the bottom of the screen and keeps the buffer consistent. `_moveCursor` is
+ * optional: losing it costs the horizontal half of the movement, not the rows.
+ */
+interface InputHandlerLike {
+  lineFeed(): void;
+  _moveCursor?(x: number, y: number): void;
+}
+
 interface StoredImage {
   bitmap: ImageBitmap;
   width: number;
@@ -51,10 +69,24 @@ interface StoredImage {
   used: number;
 }
 
-interface PlaceSpec extends KittyCommand {
+/**
+ * Where a placement was anchored, kept beside the command rather than merged
+ * into it: KittyCommand is an index-signature bag of protocol keys, and a
+ * marker is neither a string nor a number.
+ */
+interface PlaceAnchor {
   cellX: number;
   /** Under 'scrollback' this is an absolute buffer row; under 'viewport' a screen row. */
   row: number;
+  marker?: IMarker;
+  alt: boolean;
+}
+
+interface PlaceSpec {
+  cmd: KittyCommand;
+  anchor: PlaceAnchor;
+  /** The rectangle in cells the cursor advance consumed, when it ran. */
+  cells?: { cols: number; rows: number };
 }
 
 interface Placement {
@@ -70,6 +102,18 @@ interface Placement {
   srcW: number;
   srcH: number;
   z: number;
+  /**
+   * A marker on the anchoring line, under the 'scrollback' anchor.
+   *
+   * xterm keeps a marker's `line` correct as the scrollback fills and old lines
+   * are trimmed off the top, and disposes it when its line is trimmed away
+   * entirely. A bare absolute row cannot do either: it silently drifts by the
+   * trim count once the scrollback saturates, and nothing ever tells the
+   * overlay the row it was anchored to no longer exists.
+   */
+  marker?: IMarker;
+  /** True when the placement was made on the alternate screen. */
+  alt: boolean;
 }
 
 export interface KittyGraphicsOptions extends KittyOptions {
@@ -117,6 +161,11 @@ export class KittyGraphics {
 
   /** Decoded images, keyed by the sender's image id. */
   private readonly images = new Map<number, StoredImage>();
+  /**
+   * Transmitted `s`/`v` pixel sizes, keyed by image id, recorded before the
+   * decode settles so a placement can size itself synchronously.
+   */
+  private readonly pixelSizes = new Map<number, { width: number; height: number }>();
   /** Active placements, keyed by `imageId/placementId`. */
   private readonly placements = new Map<string, Placement>();
   /** Chunked transmissions in progress, keyed by image id. */
@@ -139,6 +188,8 @@ export class KittyGraphics {
   readonly element: HTMLDivElement;
   private disposed = false;
   private repositionPending = false;
+  private handler: InputHandlerLike | null = null;
+  private handlerChecked = false;
   private useCounter = 0;
   private readonly teardown: Array<() => void> = [];
   private readonly term: Terminal;
@@ -191,9 +242,41 @@ export class KittyGraphics {
     const onScroll = this.term.onScroll(schedule);
     const onResize = this.term.onResize(schedule);
     this.teardown.push(() => onScroll.dispose(), () => onResize.dispose());
+
+    // Switching screens changes which placements are on screen at all, and the
+    // alternate screen's own placements are discarded with its text.
+    const onBufferChange = this.term.buffer.onBufferChange(() => {
+      this.dropPlacements((p) => p.alt);
+      schedule();
+    });
+    this.teardown.push(() => onBufferChange.dispose());
+
+    // "The clear screen escape code (usually <ESC>[2J) should also clear all
+    // images. This is so that the clear command works." The partial erases
+    // (0J, 1J) must leave graphics alone, so only 2J and 3J are acted on.
+    // The handler returns false so xterm still performs the erase itself.
+    try {
+      const onErase = this.term.parser.registerCsiHandler({ final: 'J' }, (params) => {
+        const mode = Number(params[0] ?? 0);
+        if (mode === 2 || mode === 3) this.dropPlacements(() => true);
+        return false;
+      });
+      this.teardown.push(() => onErase.dispose());
+    } catch {
+      // A build without registerCsiHandler keeps images across a clear.
+    }
     // A font size or device pixel ratio change also shifts the cell box.
     window.addEventListener('resize', schedule, { passive: true });
     this.teardown.push(() => window.removeEventListener('resize', schedule));
+  }
+
+  /** Remove the placements matching `predicate`, leaving the image data alone. */
+  private dropPlacements(predicate: (p: Placement) => boolean): void {
+    for (const [key, p] of [...this.placements]) {
+      if (!predicate(p)) continue;
+      this.detach(p);
+      this.placements.delete(key);
+    }
   }
 
   /** Drop every placement and image, as on a terminal reset. */
@@ -202,6 +285,7 @@ export class KittyGraphics {
     this.placements.clear();
     for (const image of this.images.values()) this.closeBitmap(image.bitmap);
     this.images.clear();
+    this.pixelSizes.clear();
     this.pending.clear();
     this.pendingPlacement.clear();
     this.deferredPlacements.clear();
@@ -339,7 +423,7 @@ export class KittyGraphics {
         // The first chunk of an a=T stream carries the placement parameters.
         // The cursor position is captured now so the placement lands where the
         // sender expects even if the cursor moves during streaming.
-        this.pendingPlacement.set(key, { ...cmd, ...this.cursorAnchor() });
+        this.pendingPlacement.set(key, { cmd: { ...cmd }, anchor: this.cursorAnchor() });
       }
     } else {
       // Fill in keys that only appear on a later chunk, which some senders do
@@ -348,7 +432,7 @@ export class KittyGraphics {
         if (entry.params[k] === undefined) entry.params[k] = cmd[k];
       }
       if (andPlace && !this.pendingPlacement.has(key)) {
-        this.pendingPlacement.set(key, { ...entry.params, ...this.cursorAnchor() });
+        this.pendingPlacement.set(key, { cmd: { ...entry.params }, anchor: this.cursorAnchor() });
       }
     }
 
@@ -363,6 +447,16 @@ export class KittyGraphics {
     this.pendingPlacement.delete(key);
 
     const imageId = params.i ?? 0;
+    if (params.s && params.v) {
+      this.pixelSizes.set(imageId, { width: params.s, height: params.v });
+    }
+    // The cursor moves here, at the end of the transmission and while the
+    // parser is still inside this APC, rather than when the decode settles: by
+    // then the bytes that follow the image in the stream have already been
+    // printed, and they would be printed over it.
+    if (placementSpec) {
+      placementSpec.cells = this.applyCursorPolicy(params, this.sourceSize(imageId)) ?? undefined;
+    }
     this.decoding.add(imageId);
     this.decodeAndStore(imageId, params, fullB64)
       .then(() => {
@@ -435,6 +529,9 @@ export class KittyGraphics {
       used: ++this.useCounter,
     };
     this.images.set(imageId, entry);
+    // The decoded size is the authoritative one; a PNG carries its own
+    // dimensions and the transmitted s/v may have been absent or approximate.
+    this.pixelSizes.set(imageId, { width: bitmap.width, height: bitmap.height });
     this.evict();
 
     if (previous) {
@@ -456,6 +553,7 @@ export class KittyGraphics {
       if (this.images.size <= this.storageLimit) break;
       this.closeBitmap(image.bitmap);
       this.images.delete(id);
+      this.pixelSizes.delete(id);
     }
   }
 
@@ -471,7 +569,12 @@ export class KittyGraphics {
 
   private handlePlace(cmd: KittyCommand): void {
     const imageId = cmd.i ?? 0;
-    const spec: PlaceSpec = { ...cmd, ...this.cursorAnchor() };
+    const spec: PlaceSpec = { cmd, anchor: this.cursorAnchor() };
+
+    // Before anything else, and whether or not the image has arrived: the
+    // placement occupies those cells either way, and the stream after it is
+    // written on the assumption that the cursor has moved past them.
+    spec.cells = this.applyCursorPolicy(cmd, this.sourceSize(imageId)) ?? undefined;
 
     if (this.images.has(imageId)) {
       this.placeImage(imageId, spec);
@@ -487,8 +590,8 @@ export class KittyGraphics {
         queue = [];
         this.deferredPlacements.set(imageId, queue);
       }
-      const pid = (spec.p ?? 0) || 1;
-      const existing = queue.findIndex((s) => ((s.p ?? 0) || 1) === pid);
+      const pid = (spec.cmd.p ?? 0) || 1;
+      const existing = queue.findIndex((s) => ((s.cmd.p ?? 0) || 1) === pid);
       if (existing >= 0) queue[existing] = spec;
       else queue.push(spec);
       return;
@@ -502,18 +605,15 @@ export class KittyGraphics {
     if (!img) return;
     img.used = ++this.useCounter;
 
-    const placementId = (spec.p ?? 0) || 1;
+    const placementId = (spec.cmd.p ?? 0) || 1;
     const key = `${imageId}/${placementId}`;
 
-    // The sender may specify c (columns) and r (rows); when it does not, derive
-    // them from the source rectangle against the cell box.
-    const cell = this.cellPixels();
-    const srcW = (spec.w ?? 0) || img.width;
-    const srcH = (spec.h ?? 0) || img.height;
-    let cols = spec.c ?? 0;
-    let rows = spec.r ?? 0;
-    if (cols <= 0) cols = Math.max(1, Math.ceil(srcW / cell.width));
-    if (rows <= 0) rows = Math.max(1, Math.ceil(srcH / cell.height));
+    const srcW = (spec.cmd.w ?? 0) || img.width;
+    const srcH = (spec.cmd.h ?? 0) || img.height;
+    // The same derivation the cursor advance used, so the cells the canvas
+    // covers and the cells the cursor consumed are the same cells.
+    const size = spec.cells ?? this.placementCells(spec.cmd, img) ?? { cols: 1, rows: 1 };
+    const { cols, rows } = size;
 
     let placement = this.placements.get(key);
     if (!placement) {
@@ -532,15 +632,23 @@ export class KittyGraphics {
       this.placements.set(key, placement);
     }
 
-    placement.cellX = spec.cellX | 0;
-    placement.row = spec.row | 0;
+    // Re-placing the same image and placement id moves it, so the marker that
+    // held the old row is finished with. The field is reassigned before the old
+    // marker is disposed, because disposing it runs onMarkerDisposed, which
+    // drops every placement still pointing at it.
+    const previousMarker = placement.marker;
+    placement.marker = spec.anchor.marker;
+    if (previousMarker && previousMarker !== spec.anchor.marker) this.disposeMarker(previousMarker);
+    placement.alt = spec.anchor.alt;
+    placement.cellX = spec.anchor.cellX | 0;
+    placement.row = spec.anchor.row | 0;
     placement.cols = cols;
     placement.rows = rows;
-    placement.srcX = spec.x ?? 0;
-    placement.srcY = spec.y ?? 0;
+    placement.srcX = spec.cmd.x ?? 0;
+    placement.srcY = spec.cmd.y ?? 0;
     placement.srcW = srcW;
     placement.srcH = srcH;
-    placement.z = spec.z ?? 0;
+    placement.z = spec.cmd.z ?? 0;
 
     this.renderPlacement(placement, img);
     this.positionPlacement(placement);
@@ -578,7 +686,11 @@ export class KittyGraphics {
     const cell = this.cellPixels();
     const screenRow = this.screenRow(p);
     p.canvas.style.transform = `translate(${p.cellX * cell.width}px, ${screenRow * cell.height}px)`;
-    const visible = screenRow + p.rows > 0 && screenRow < this.term.rows;
+    // A placement belongs to the screen it was made on. The alternate screen is
+    // a separate buffer with its own coordinates, so a main-screen placement
+    // must not be painted over a full-screen application, nor the reverse.
+    const onThisScreen = p.alt === (this.term.buffer.active.type === 'alternate');
+    const visible = onThisScreen && screenRow + p.rows > 0 && screenRow < this.term.rows;
     p.canvas.style.display = visible ? 'block' : 'none';
   }
 
@@ -607,6 +719,7 @@ export class KittyGraphics {
         if (freeData) {
           for (const image of this.images.values()) this.closeBitmap(image.bitmap);
           this.images.clear();
+          this.pixelSizes.clear();
         }
         break;
       }
@@ -621,6 +734,7 @@ export class KittyGraphics {
           const image = this.images.get(id);
           if (image) this.closeBitmap(image.bitmap);
           this.images.delete(id);
+          this.pixelSizes.delete(id);
         }
         break;
       }
@@ -641,6 +755,135 @@ export class KittyGraphics {
 
   private detach(p: Placement): void {
     p.canvas.remove();
+    const marker = p.marker;
+    p.marker = undefined;
+    if (marker) this.disposeMarker(marker);
+  }
+
+  /** Dispose a marker, tolerating one xterm already disposed with its line. */
+  private disposeMarker(marker: IMarker): void {
+    try {
+      if (!marker.isDisposed) marker.dispose();
+    } catch {
+      // The line was trimmed out from under it.
+    }
+  }
+
+  // --- Cursor ---------------------------------------------------------------
+
+  /**
+   * The placement rectangle in cells.
+   *
+   * `c` and `r` win when the sender gives them. When only one is given the
+   * other follows from the source aspect ratio, so the image is displayed
+   * undistorted. When neither is given the rectangle is the source pixel size
+   * measured against the cell box, which is the case that matters in practice:
+   * `kitten icat` sends the pixel dimensions and no `c`/`r` at all, and leaves
+   * the terminal to work out how many cells that is.
+   *
+   * Returns null when there is nothing to derive from, so a caller can tell
+   * "zero cells" from "not known yet".
+   */
+  private placementCells(
+    cmd: KittyCommand,
+    source: { width: number; height: number } | undefined,
+  ): { cols: number; rows: number } | null {
+    let cols = cmd.c ?? 0;
+    let rows = cmd.r ?? 0;
+    if (cols > 0 && rows > 0) return { cols, rows };
+
+    const srcW = (cmd.w ?? 0) || source?.width || 0;
+    const srcH = (cmd.h ?? 0) || source?.height || 0;
+    if (!srcW || !srcH) {
+      if (cols > 0 || rows > 0) return { cols: Math.max(1, cols), rows: Math.max(1, rows) };
+      return null;
+    }
+
+    const cell = this.cellPixels();
+    if (cols > 0) {
+      rows = Math.max(1, Math.round((cols * cell.width * srcH) / (srcW * cell.height)));
+    } else if (rows > 0) {
+      cols = Math.max(1, Math.round((rows * cell.height * srcW) / (srcH * cell.width)));
+    } else {
+      cols = Math.max(1, Math.ceil(srcW / cell.width));
+      rows = Math.max(1, Math.ceil(srcH / cell.height));
+    }
+    return { cols, rows };
+  }
+
+  /**
+   * The pixel size of an image, as far as it is known synchronously.
+   *
+   * Decoding is asynchronous but the cursor has to move at the moment the
+   * placement is parsed, so the transmitted `s`/`v` are recorded up front and
+   * used until the real bitmap dimensions replace them.
+   */
+  private sourceSize(imageId: number): { width: number; height: number } | undefined {
+    return this.images.get(imageId) ?? this.pixelSizes.get(imageId);
+  }
+
+  /**
+   * Move the cursor as the protocol requires once an image has been placed.
+   *
+   * The spec: "After placing an image on the screen the cursor must be moved to
+   * the right by the number of cols in the image placement rectangle and down
+   * by the number of rows". `kitten icat` depends on it completely, emitting
+   * only a trailing CR LF of its own, so a terminal that does not move the
+   * cursor draws the next prompt straight through the image.
+   *
+   * This has to happen at the exact point in the stream where the placement was
+   * parsed. `term.write` cannot do it: xterm appends a write made from inside a
+   * parser callback to the write buffer, so it is parsed after the rest of the
+   * current chunk, and icat's trailing CR LF is in that same chunk. Driving the
+   * input handler runs the same `lineFeed` the parser runs for a `\n`, in the
+   * right place, so the rows are genuinely consumed in the buffer and the
+   * scroll at the bottom of the screen happens exactly as it does for text.
+   */
+  private advanceCursor(cols: number, rows: number): void {
+    const handler = this.inputHandler();
+    if (!handler) {
+      // No private input handler on this build. Queueing the movement still
+      // consumes the rows, which is much closer to right than not moving at
+      // all; it only lands after the remainder of the current chunk.
+      const seq = '\n'.repeat(Math.max(0, rows)) + (cols > 0 ? `\x1b[${cols}C` : '');
+      if (seq) this.term.write(seq);
+      return;
+    }
+    for (let i = 0; i < rows; i++) handler.lineFeed();
+    if (cols > 0) handler._moveCursor?.(cols, 0);
+  }
+
+  /**
+   * Size the placement and apply the cursor movement policy, returning the
+   * rectangle used so the canvas can be laid out over exactly the cells the
+   * cursor just consumed rather than recomputing and risking a disagreement.
+   */
+  private applyCursorPolicy(
+    cmd: KittyCommand,
+    source: { width: number; height: number } | undefined,
+  ): { cols: number; rows: number } | null {
+    const size = this.placementCells(cmd, source);
+    if (!size) return null;
+    // C=1 is the sender asking for no movement at all. A virtual placement is
+    // not at the cursor and a relative placement takes its position from its
+    // parent, so neither moves the cursor either.
+    const moves = (cmd.C ?? 0) !== 1 && (cmd.U ?? 0) !== 1 && (cmd.P ?? 0) === 0;
+    if (moves) this.advanceCursor(size.cols, size.rows);
+    return size;
+  }
+
+  /** xterm's input handler, when this build exposes it. */
+  private inputHandler(): InputHandlerLike | null {
+    if (this.handlerChecked) return this.handler;
+    this.handlerChecked = true;
+    try {
+      const candidate = (this.term as unknown as { _core?: { _inputHandler?: InputHandlerLike } })
+        ._core?._inputHandler;
+      if (candidate && typeof candidate.lineFeed === 'function') this.handler = candidate;
+    } catch {
+      this.handler = null;
+    }
+    return this.handler;
   }
 
   // --- Geometry -------------------------------------------------------------
@@ -656,20 +899,50 @@ export class KittyGraphics {
    * newline the application emitted would advance the base and park the
    * placement in scrollback history where only a scrolled-up user could see it.
    */
-  private cursorAnchor(): { cellX: number; row: number } {
+  private cursorAnchor(): PlaceAnchor {
     const buffer = this.term.buffer.active;
     const cellX = buffer.cursorX | 0;
     const cursorY = buffer.cursorY | 0;
-    return {
-      cellX,
-      row: this.anchor === 'scrollback' ? buffer.baseY + cursorY : cursorY,
-    };
+    const alt = buffer.type === 'alternate';
+
+    if (this.anchor !== 'scrollback') return { cellX, row: cursorY, alt };
+
+    // A marker tracks the line through scrollback trimming; the plain absolute
+    // row is kept as the fallback for a build without registerMarker and as the
+    // value used once a marker has been disposed.
+    let marker: IMarker | undefined;
+    try {
+      marker = this.term.registerMarker(0) ?? undefined;
+    } catch {
+      marker = undefined;
+    }
+    if (marker) {
+      marker.onDispose(() => this.onMarkerDisposed(marker as IMarker));
+    }
+    return { cellX, row: buffer.baseY + cursorY, marker, alt };
+  }
+
+  /**
+   * Drop the placements whose anchoring line has been trimmed out of the
+   * scrollback. The image is gone from the session's history, so keeping the
+   * canvas would pin it to whatever row happens to sit at that index now.
+   */
+  private onMarkerDisposed(marker: IMarker): void {
+    if (this.disposed) return;
+    for (const [key, p] of [...this.placements]) {
+      if (p.marker !== marker) continue;
+      this.detach(p);
+      this.placements.delete(key);
+    }
   }
 
   /** The placement's row in screen coordinates, whatever it was anchored to. */
   private screenRow(p: Placement): number {
     if (this.anchor === 'viewport') return p.row;
-    return p.row - this.term.buffer.active.viewportY;
+    // The marker's line is the live absolute row: it is rewritten as the
+    // scrollback trims, where p.row was only correct when it was captured.
+    const absolute = p.marker && !p.marker.isDisposed ? p.marker.line : p.row;
+    return absolute - this.term.buffer.active.viewportY;
   }
 
   /**
