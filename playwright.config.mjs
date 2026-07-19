@@ -38,6 +38,27 @@ export default defineConfig({
         permissions: ['clipboard-read', 'clipboard-write'],
       },
     },
+    {
+      // The chrome suite again at a doubled device pixel ratio. The frame is
+      // the one part of the package whose correctness is partly a question of
+      // where edges land on the device pixel grid, so it is checked at both.
+      name: 'chromium-dpr2',
+      testMatch: /chrome\.spec\.mjs/,
+      use: {
+        baseURL: BASE_URL,
+        deviceScaleFactor: 2,
+        launchOptions: {
+          executablePath: CHROMIUM,
+          args: [
+            '--use-gl=angle',
+            '--use-angle=swiftshader',
+            '--enable-unsafe-swiftshader',
+            '--disable-lcd-text',
+            '--force-device-scale-factor=2',
+          ],
+        },
+      },
+    },
   ],
   webServer: {
     command: `node test/server.mjs`,

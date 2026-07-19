@@ -27,6 +27,9 @@ times:
   with a shift escape hatch, Keyboard Lock for reserved chords in fullscreen,
   and a cursor that does not blink by default.
 
+There is also an optional [macOS-style window frame](#window-chrome), in a
+separate export that the terminal does not depend on.
+
 Transports are not baked in. The core consumes and produces raw bytes, so an
 existing protocol needs a three-method adapter and this package never learns
 anything about its framing.
@@ -132,6 +135,58 @@ escape hatches: `xterm`, merged into the xterm options last so it wins, and
 consumer who needs `term.parser`, `term.registerMarker` or a third-party addon
 should not have to fork the package to get it.
 
+## Window chrome
+
+`webterm/chrome` is an optional macOS-style frame: rounded corners, a title bar
+with traffic lights, an optional title and tabs, a layered shadow, and a
+decorative background with padding behind it. It is what turns an embedded
+terminal in a landing page or a docs site from a black rectangle into something
+that looks placed on purpose.
+
+```ts
+import { createWindowChrome } from 'webterm/chrome';
+import 'webterm/chrome.css';
+
+const chrome = createWindowChrome({ title: 'zsh', background: 'aurora' });
+chrome.mount(document.getElementById('demo'));
+
+const term = await new WebTerm().open(chrome.content);
+```
+
+It imports nothing from the terminal, so the frame works around any content and
+a consumer who does not want it never loads it:
+
+```ts
+chrome.content.innerHTML = '<pre>anything at all</pre>';
+```
+
+Backgrounds ship as presets: `aurora` (the default), `candy`, `dawn`, `mint`,
+`noir`, `ocean`, `slate`, `sunset`, and `none`. `background` also takes a plain
+CSS value or one of `{ color }`, `{ gradient }`, `{ image }`, `{ css }`.
+
+`appearance` defaults to `auto` and follows `prefers-color-scheme`; `light` or
+`dark` pins it. Every transition is gated behind `prefers-reduced-motion: no-preference`.
+
+The traffic lights are decorative by default and are hidden from the
+accessibility tree, because a control that is announced and then does nothing is
+worse than no control. `lights: { interactive: true }` makes them real buttons
+with labels, reveals the platform glyphs on hover, and emits `close`,
+`minimize` and `maximize`. The chrome acts on none of them: what closing means
+belongs to the consumer. Tabs behave the same way, and interactive tabs get
+`role="tablist"`, a roving tabindex and arrow, `Home` and `End` navigation.
+
+Set `contentBackground` to the terminal's background colour. `fit()` rounds the
+grid down to whole cells, so a few pixels of the slot are left over on the right
+and bottom, and matching the colour is what keeps them from reading as a border.
+
+`contentPadding` insets the slot. The slot is nested one level inside the padded
+box on purpose: `FitAddon` subtracts only the terminal element's own padding
+when it measures, never its parent's, so padding applied directly to the
+terminal's container produces a grid wider than the box it sits in.
+
+The frame is CSS custom properties throughout, under `--webterm-chrome-*`, and
+nothing is injected into the document on import.
+
 ## Known limits
 
 **Kitty graphics depend on one upstream API and it has disappeared once.**
@@ -178,6 +233,12 @@ npm run test:browser   # playwright against the system chromium
 The browser tests start one process, a static file server for the fixtures,
 which Playwright owns and tears down. There is no application server, so a
 failed run leaves nothing behind. `WEBTERM_CHROMIUM` overrides the browser path.
+
+The chrome suite runs twice, at device pixel ratios 1 and 2, and writes the
+preset screenshots to `test/screenshots/<project>/`. The frame is the one part
+of the package whose correctness is partly a question of where an edge lands on
+the device pixel grid, which is also why one of its tests samples the seams
+against a deliberately fractional container size.
 
 ## License
 

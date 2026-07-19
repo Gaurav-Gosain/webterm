@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webterm chrome fixture</title>
+    <link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/dist/webterm.css" />
+    <link rel="stylesheet" href="/dist/chrome.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #ffffff;
+      }
+      #host {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Drives the built bundles rather than the source, so the suites exercise
+      what a consumer installs. Options come from the query string.
+
+      `terminal=0` renders the frame with nothing inside it, which is the case
+      the chrome has to support on its own.
+    -->
+    <div id="host"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "@xterm/xterm": "/node_modules/@xterm/xterm/lib/xterm.mjs",
+          "@xterm/addon-fit": "/node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+          "@xterm/addon-webgl": "/node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs",
+          "@xterm/addon-canvas": "/node_modules/@xterm/addon-canvas/lib/xterm-addon-canvas.mjs",
+          "@xterm/addon-image": "/node_modules/@xterm/addon-image/lib/addon-image.mjs",
+          "@xterm/addon-web-links": "/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs"
+        }
+      }
+    </script>
+    <script type="module">
+      import { createWindowChrome, backgrounds } from '/dist/chrome/index.js';
+      import { WebTerm } from '/dist/index.js';
+
+      const params = new URLSearchParams(location.search);
+      const host = document.getElementById('host');
+      if (params.get('hostWidth')) host.style.width = params.get('hostWidth');
+      if (params.get('hostHeight')) host.style.height = params.get('hostHeight');
+
+      const options = {};
+      if (params.has('appearance')) options.appearance = params.get('appearance');
+      if (params.has('background')) options.background = params.get('background');
+      if (params.has('title')) options.title = params.get('title');
+      if (params.has('titleAlign')) options.titleAlign = params.get('titleAlign');
+      if (params.get('titleBar') === '0') options.titleBar = false;
+      if (params.has('padding')) options.padding = Number(params.get('padding'));
+      if (params.has('radius')) options.radius = Number(params.get('radius'));
+      if (params.has('shadow')) options.shadow = params.get('shadow');
+      if (params.has('maxWidth')) options.maxWidth = Number(params.get('maxWidth'));
+      if (params.has('contentPadding')) options.contentPadding = Number(params.get('contentPadding'));
+      if (params.get('lights') === '0') options.lights = false;
+      if (params.get('lights') === 'interactive') options.lights = { interactive: true };
+      if (params.has('tabs')) {
+        const items = params
+          .get('tabs')
+          .split(',')
+          .map((title, i) => ({ id: `t${i}`, title }));
+        options.tabs = { items, interactive: params.get('tabsInteractive') === '1' };
+      }
+
+      const theme = params.get('theme') ?? 'catppuccin-mocha';
+      const backgroundOfTheme = { 'catppuccin-mocha': '#1e1e2e', 'catppuccin-latte': '#eff1f5' };
+      options.contentBackground = params.get('contentBackground') ?? backgroundOfTheme[theme] ?? '#1e1e2e';
+
+      const events = { close: 0, minimize: 0, maximize: 0, tabchange: [] };
+      const chrome = createWindowChrome(options);
+      chrome.on('close', () => events.close++);
+      chrome.on('minimize', () => events.minimize++);
+      chrome.on('maximize', () => events.maximize++);
+      chrome.on('tabchange', (id) => events.tabchange.push(id));
+      chrome.mount(host);
+
+      window.chrome_ = chrome;
+      window.chromeEvents = events;
+      window.backgrounds = backgrounds;
+
+      if (params.get('terminal') !== '0') {
+        const term = new WebTerm({
+          fontFamily: params.get('font') ?? 'monospace',
+          fontSize: Number(params.get('fontSize') ?? 13),
+          theme,
+          renderer: { prefer: params.get('renderer') ?? 'auto' },
+        });
+        await term.open(chrome.content);
+        window.term = term;
+
+        const demo = params.get('demo') ?? 'default';
+        if (demo !== 'none') term.write(DEMO[demo] ?? DEMO.default);
+        term.flush();
+        // One frame for the renderer to paint before a screenshot is taken.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }
+
+      window.ready = true;
+    </script>
+    <script>
+      // A classic script, so it has already run by the time the deferred module
+      // above executes and reads window.DEMO.
+      var g = '\x1b[32m';
+      var b = '\x1b[34m';
+      var m = '\x1b[35m';
+      var y = '\x1b[33m';
+      var d = '\x1b[90m';
+      var r = '\x1b[0m';
+      window.DEMO = {
+        default: [
+          g + '~/projects/webterm' + r + ' ' + b + 'main' + r,
+          d + '$' + r + ' npm run build',
+          '',
+          '  ' + m + 'ESM' + r + '  dist/index.js          49.56 KB',
+          '  ' + m + 'ESM' + r + '  dist/chrome/index.js   12.30 KB',
+          '  ' + m + 'ESM' + r + '  dist/transport/index.js 6.46 KB',
+          '  ' + m + 'DTS' + r + '  dist/index.d.ts        14.92 KB',
+          '',
+          '  ' + y + 'build success' + r + ' in 225ms',
+          '',
+          g + '~/projects/webterm' + r + ' ' + b + 'main' + r,
+          d + '$' + r + ' ',
+        ].join('\r\n'),
+        blocks: (function () {
+          var out = [];
+          for (var i = 0; i < 6; i++) {
+            var row = '';
+            for (var j = 0; j < 40; j++) row += '\x1b[48;5;' + (17 + ((i * 40 + j) % 200)) + 'm ';
+            out.push(row + '\x1b[0m');
+          }
+          return out.join('\r\n');
+        })(),
+      };
+    </script>
+  </body>
+</html>

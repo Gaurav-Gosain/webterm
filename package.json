@@ -26,7 +26,12 @@
     },
     "./css": "./dist/webterm.css",
     "./webterm.css": "./dist/webterm.css",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./chrome": {
+      "types": "./dist/chrome/index.d.ts",
+      "import": "./dist/chrome/index.js"
+    },
+    "./chrome.css": "./dist/chrome.css"
   },
   "scripts": {
     "build": "tsup",
@@ -60,6 +65,8 @@
     "kitty-graphics",
     "websocket",
     "webtransport",
-    "pty"
+    "pty",
+    "window-chrome",
+    "macos"
   ]
 }

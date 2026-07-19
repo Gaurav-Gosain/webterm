@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webterm chrome presets</title>
+    <link rel="stylesheet" href="/dist/chrome.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(2, 460px);
+        width: 920px;
+      }
+      .cell {
+        width: 460px;
+        height: 300px;
+      }
+      .sample {
+        margin: 0;
+        padding: 14px 16px;
+        color: #cdd6f4;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .sample .p {
+        color: #a6e3a1;
+      }
+      .sample .k {
+        color: #89b4fa;
+      }
+      .sample .d {
+        color: #6c7086;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Every background preset, alternating light and dark frames, for one
+      screenshot that shows what a consumer gets with no configuration beyond a
+      name. No terminal here: the frame has to stand on its own.
+    -->
+    <div id="grid"></div>
+    <script type="module">
+      import { createWindowChrome, backgroundNames } from '/dist/chrome/index.js';
+
+      const grid = document.getElementById('grid');
+      const sample = (name) => `
+        <pre class="sample"><span class="p">~/projects</span> <span class="k">main</span>
+<span class="d">$</span> webterm --background ${name}
+
+  frame      macos
+  background ${name}
+  shadow     medium
+
+<span class="p">~/projects</span> <span class="k">main</span>
+<span class="d">$</span> <span class="k">&#9608;</span></pre>`;
+
+      for (const [index, name] of backgroundNames.entries()) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        grid.appendChild(cell);
+
+        const chrome = createWindowChrome({
+          background: name,
+          // Alternating, so one image shows both frames.
+          appearance: index % 2 === 0 ? 'dark' : 'light',
+          title: name,
+          padding: 32,
+          contentBackground: index % 2 === 0 ? '#1e1e2e' : '#181825',
+        });
+        chrome.content.innerHTML = sample(name);
+        chrome.mount(cell);
+      }
+
+      window.ready = true;
+    </script>
+  </body>
+</html>

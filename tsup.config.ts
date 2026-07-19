@@ -10,6 +10,7 @@ export default defineConfig([
     entry: {
       index: 'src/index.ts',
       'transport/index': 'src/transport/index.ts',
+      'chrome/index': 'src/chrome/index.ts',
     },
     format: ['esm'],
     target: 'es2022',
@@ -26,6 +27,7 @@ export default defineConfig([
     onSuccess: async () => {
       mkdirSync('dist', { recursive: true });
       copyFileSync('src/css/webterm.css', 'dist/webterm.css');
+      copyFileSync('src/chrome/css/chrome.css', 'dist/chrome.css');
     },
   },
   {
@@ -41,5 +43,18 @@ export default defineConfig([
     clean: false,
     minify: true,
     noExternal: [/^@xterm\//],
+  },
+  {
+    // The chrome standalone, separate from the terminal's so a script-tag user
+    // who only wants the frame does not download xterm to get it.
+    entry: { 'webterm-chrome.standalone': 'src/chrome/index.ts' },
+    format: ['iife'],
+    globalName: 'WebTermChrome',
+    target: 'es2022',
+    platform: 'browser',
+    dts: false,
+    sourcemap: true,
+    clean: false,
+    minify: true,
   },
 ]);

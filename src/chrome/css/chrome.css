@@ -1,0 +1,371 @@
+/*
+ * webterm window chrome.
+ *
+ * A separate stylesheet from webterm.css, and nothing here targets a terminal:
+ * the frame wraps a slot, so it is equally correct around a code block or an
+ * image. Importing this file has no effect until an element carries the class.
+ *
+ * Every value a consumer might reasonably change is a custom property. The
+ * `webterm` stem mirrors CSS_PREFIX in src/name.ts; renaming the package means
+ * a rename here too.
+ */
+
+.webterm-chrome {
+  /* Geometry. */
+  --webterm-chrome-radius: 10px;
+  --webterm-chrome-padding: 48px;
+  --webterm-chrome-titlebar-height: 38px;
+  --webterm-chrome-light-size: 12px;
+  --webterm-chrome-light-gap: 8px;
+  --webterm-chrome-lights-inset: 13px;
+  --webterm-chrome-tabbar-height: 32px;
+  --webterm-chrome-content-padding: 0px;
+
+  /* Type. */
+  --webterm-chrome-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+    'Helvetica Neue', Arial, sans-serif;
+  --webterm-chrome-title-size: 13px;
+  --webterm-chrome-title-weight: 590;
+
+  /* Light appearance, the base. The dark values are applied below, either by
+   * prefers-color-scheme when appearance is auto or by the data attribute. */
+  --webterm-chrome-frame: linear-gradient(180deg, #ecebec 0%, #dedcdd 100%);
+  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.16);
+  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.7);
+  --webterm-chrome-separator: rgba(0, 0, 0, 0.13);
+  --webterm-chrome-title-color: rgba(0, 0, 0, 0.62);
+  --webterm-chrome-tabbar: #e2e0e1;
+  --webterm-chrome-tab-color: rgba(0, 0, 0, 0.5);
+  --webterm-chrome-tab-active-color: rgba(0, 0, 0, 0.78);
+  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.85);
+  --webterm-chrome-content-bg: #1e1e2e;
+
+  --webterm-chrome-background: transparent;
+  --webterm-chrome-shadow: none;
+
+  /* The traffic light colours are the platform's, and are the same in light
+   * and dark. Each ring is the darker rim macOS draws around the fill. */
+  --webterm-chrome-light-close: #ff5f57;
+  --webterm-chrome-light-close-ring: #e0443e;
+  --webterm-chrome-light-minimize: #febc2e;
+  --webterm-chrome-light-minimize-ring: #dea123;
+  --webterm-chrome-light-maximize: #28c840;
+  --webterm-chrome-light-maximize-ring: #1aab29;
+  --webterm-chrome-light-inactive: #c8c8c8;
+  --webterm-chrome-light-glyph: rgba(0, 0, 0, 0.55);
+
+  --webterm-chrome-ease: cubic-bezier(0.23, 1, 0.32, 1);
+
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: var(--webterm-chrome-padding);
+  background: var(--webterm-chrome-background);
+  font-family: var(--webterm-chrome-font);
+}
+
+.webterm-chrome *,
+.webterm-chrome *::before,
+.webterm-chrome *::after {
+  box-sizing: border-box;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Only when appearance is auto. An explicit light frame on a dark system
+   * stays light, which is the whole point of setting it. */
+  .webterm-chrome:not([data-appearance]) {
+    --webterm-chrome-frame: linear-gradient(180deg, #3a3a40 0%, #2f2f34 100%);
+    --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.6);
+    --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.09);
+    --webterm-chrome-separator: rgba(0, 0, 0, 0.45);
+    --webterm-chrome-title-color: rgba(255, 255, 255, 0.66);
+    --webterm-chrome-tabbar: #2a2a2f;
+    --webterm-chrome-tab-color: rgba(255, 255, 255, 0.5);
+    --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.86);
+    --webterm-chrome-tab-active: rgba(255, 255, 255, 0.1);
+    --webterm-chrome-light-inactive: #4a4a4f;
+  }
+}
+
+.webterm-chrome[data-appearance='dark'] {
+  --webterm-chrome-frame: linear-gradient(180deg, #3a3a40 0%, #2f2f34 100%);
+  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.6);
+  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.09);
+  --webterm-chrome-separator: rgba(0, 0, 0, 0.45);
+  --webterm-chrome-title-color: rgba(255, 255, 255, 0.66);
+  --webterm-chrome-tabbar: #2a2a2f;
+  --webterm-chrome-tab-color: rgba(255, 255, 255, 0.5);
+  --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.86);
+  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.1);
+  --webterm-chrome-light-inactive: #4a4a4f;
+}
+
+/* --- The window ---------------------------------------------------------- */
+
+.webterm-chrome-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--webterm-chrome-radius);
+  /* The window paints the frame colour, not the content colour, so the
+   * antialiased pixels at a rounded corner blend frame into content rather
+   * than exposing the decorative background through a hairline gap. */
+  background: var(--webterm-chrome-frame);
+  box-shadow: var(--webterm-chrome-shadow);
+  /* Clips the content to the radius, and makes the window its own stacking
+   * context so a consumer's positioned content cannot escape the frame. */
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/*
+ * The hairline ring and the top highlight are an overlay rather than a border
+ * or an outer box-shadow spread. A border would take a layout box and shift
+ * the content by a fractional pixel at a non-integer device pixel ratio; a
+ * spread shadow would sit under the content's own background at the corners.
+ * An overlay with the same radius always lands exactly on the frame edge.
+ */
+.webterm-chrome-window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow:
+    inset 0 0 0 1px var(--webterm-chrome-frame-ring),
+    inset 0 1px 0 var(--webterm-chrome-frame-highlight);
+}
+
+/* --- Title bar ----------------------------------------------------------- */
+
+.webterm-chrome-titlebar {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: grid;
+  /* Three columns, with the right one mirroring the width of the lights, so a
+   * centred title is centred against the window rather than against the space
+   * left over beside the lights. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  height: var(--webterm-chrome-titlebar-height);
+  background: var(--webterm-chrome-frame);
+  /* Drawn as a shadow rather than a border: a border participates in layout
+   * and can round to a different device pixel than the box it sits on. */
+  box-shadow: inset 0 -1px 0 var(--webterm-chrome-separator);
+  user-select: none;
+}
+
+.webterm-chrome-lights,
+.webterm-chrome-titlebar-mirror {
+  display: flex;
+  align-items: center;
+  gap: var(--webterm-chrome-light-gap);
+  padding-inline: var(--webterm-chrome-lights-inset);
+  /* Three lights plus two gaps, so the mirror reserves the same width even
+   * though it is empty. */
+  min-width: calc(
+    3 * var(--webterm-chrome-light-size) + 2 * var(--webterm-chrome-light-gap) + 2 *
+      var(--webterm-chrome-lights-inset)
+  );
+}
+
+.webterm-chrome-light {
+  display: block;
+  flex: 0 0 auto;
+  width: var(--webterm-chrome-light-size);
+  height: var(--webterm-chrome-light-size);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--webterm-chrome-light-inactive);
+  /* The rim, drawn inside so the circle keeps its exact diameter. */
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+.webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='close'] {
+  background: var(--webterm-chrome-light-close);
+  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-close-ring);
+}
+
+.webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='minimize'] {
+  background: var(--webterm-chrome-light-minimize);
+  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-minimize-ring);
+}
+
+.webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='maximize'] {
+  background: var(--webterm-chrome-light-maximize);
+  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-maximize-ring);
+}
+
+button.webterm-chrome-light {
+  position: relative;
+  cursor: default;
+  appearance: none;
+}
+
+button.webterm-chrome-light:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+/* The glyphs appear on hover of the group, not of the individual light, which
+ * is what the platform does. */
+.webterm-chrome-light svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  color: var(--webterm-chrome-light-glyph);
+}
+
+.webterm-chrome-lights:hover .webterm-chrome-light svg,
+.webterm-chrome-light:focus-visible svg {
+  opacity: 1;
+}
+
+.webterm-chrome-title {
+  min-width: 0;
+  padding-inline: 8px;
+  color: var(--webterm-chrome-title-color);
+  font-size: var(--webterm-chrome-title-size);
+  font-weight: var(--webterm-chrome-title-weight);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.webterm-chrome[data-title-align='left'] .webterm-chrome-title {
+  text-align: left;
+}
+
+/* --- Tabs ---------------------------------------------------------------- */
+
+.webterm-chrome-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: var(--webterm-chrome-tabbar-height);
+  padding: 4px 6px;
+  gap: 4px;
+  background: var(--webterm-chrome-tabbar);
+  box-shadow: inset 0 -1px 0 var(--webterm-chrome-separator);
+  user-select: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.webterm-chrome-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.webterm-chrome-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--webterm-chrome-tab-color);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.webterm-chrome-tab[data-active='true'] {
+  background: var(--webterm-chrome-tab-active);
+  color: var(--webterm-chrome-tab-active-color);
+}
+
+button.webterm-chrome-tab {
+  cursor: default;
+  appearance: none;
+}
+
+button.webterm-chrome-tab:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: -2px;
+}
+
+/* --- Content slot -------------------------------------------------------- */
+
+.webterm-chrome-content {
+  position: relative;
+  /* min-height 0 is what keeps a flex child from refusing to shrink below its
+   * content size. Without it a terminal that has grown taller than the window
+   * pushes the frame instead of scrolling, and every later fit() measures a
+   * container that is too tall. */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--webterm-chrome-content-padding);
+  background: var(--webterm-chrome-content-bg);
+}
+
+/*
+ * The slot the consumer mounts into, nested one level inside the padded box.
+ *
+ * The nesting is not decoration. The fit addon measures the terminal's parent
+ * with getComputedStyle and subtracts only the terminal element's own padding,
+ * never the parent's, so a padded parent produces a grid wider than the box it
+ * sits in and the right-hand columns are clipped. An unpadded inner element
+ * whose own box is already inset measures correctly.
+ */
+.webterm-chrome-slot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* --- Motion -------------------------------------------------------------- */
+
+/* Every transition is opt-in on the reduced-motion query rather than opt-out,
+ * so a user who has asked for less motion gets none of it even if a rule is
+ * added later without remembering to guard it. */
+@media (prefers-reduced-motion: no-preference) {
+  .webterm-chrome-light,
+  .webterm-chrome-light svg,
+  .webterm-chrome-tab {
+    transition:
+      background-color 160ms var(--webterm-chrome-ease),
+      color 160ms var(--webterm-chrome-ease),
+      opacity 120ms var(--webterm-chrome-ease);
+  }
+
+  button.webterm-chrome-light:active {
+    /* A press has to be felt. Scale rather than a colour change, because the
+     * lights already carry meaning through colour. */
+    transform: scale(0.92);
+    transition-duration: 90ms;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  button.webterm-chrome-tab:hover:not([data-active='true']) {
+    background: color-mix(in srgb, var(--webterm-chrome-tab-active) 45%, transparent);
+  }
+}
