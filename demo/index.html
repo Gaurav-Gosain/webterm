@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>webterm demo</title>
+
+    <!--
+      Classic script tags and relative paths only, so this page opens straight
+      off the filesystem with no server and no bundler. Run `npm install &&
+      npm run build` once first: the two bundles below are build output.
+    -->
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="../dist/webterm.css" />
+    <link rel="stylesheet" href="../dist/chrome.css" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --ui-bg: #f6f6f8;
+        --ui-fg: #1c1c1f;
+        --ui-muted: #6b6b76;
+        --ui-line: #dcdce3;
+        --ui-panel: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ui-bg: #131316;
+          --ui-fg: #ececf1;
+          --ui-muted: #9a9aa6;
+          --ui-line: #2c2c33;
+          --ui-panel: #1c1c21;
+        }
+      }
+
+      body {
+        margin: 0;
+        background: var(--ui-bg);
+        color: var(--ui-fg);
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+        letter-spacing: -0.01em;
+      }
+
+      .lede {
+        color: var(--ui-muted);
+        margin: 0 0 32px;
+        max-width: 62ch;
+      }
+
+      h2 {
+        font-size: 17px;
+        margin: 44px 0 6px;
+        letter-spacing: -0.005em;
+      }
+
+      h2 + p {
+        color: var(--ui-muted);
+        margin: 0 0 16px;
+        max-width: 68ch;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 14px;
+        align-items: center;
+        margin-bottom: 16px;
+        padding: 12px 14px;
+        background: var(--ui-panel);
+        border: 1px solid var(--ui-line);
+        border-radius: 10px;
+      }
+
+      .controls label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--ui-muted);
+      }
+
+      select,
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 5px 9px;
+        border-radius: 7px;
+        border: 1px solid var(--ui-line);
+        background: var(--ui-bg);
+        color: var(--ui-fg);
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--ui-muted);
+      }
+
+      /* The framed terminal. The chrome supplies its own background and
+         padding, so the host here only needs a size to fill. */
+      #framed {
+        height: 460px;
+      }
+
+      #framed > * {
+        height: 100%;
+      }
+
+      /* The bare terminal, with no chrome at all: the container is the
+         consumer's, and .webterm is the only class the package needs on it. */
+      #bare {
+        height: 320px;
+        border: 1px solid var(--ui-line);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      footer {
+        margin-top: 56px;
+        padding-top: 20px;
+        border-top: 1px solid var(--ui-line);
+        color: var(--ui-muted);
+        font-size: 13px;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main>
+      <h1>webterm</h1>
+      <p class="lede">
+        An embeddable browser terminal built on xterm.js, with kitty graphics, a
+        clipboard layer that works on insecure origins, reference-checked
+        unicode widths, and an optional macOS-style window frame. Nothing on
+        this page talks to a server: the terminal is driven by a small fake
+        shell so the rendering, the graphics and the frame are all real while
+        the far end is not.
+      </p>
+
+      <h2>The terminal, with the window chrome</h2>
+      <p>
+        Every control below is a live option. The frame is a separate export
+        that imports nothing from the terminal, so the same chrome frames any
+        content.
+      </p>
+
+      <div class="controls">
+        <label>
+          Background
+          <select id="background"></select>
+        </label>
+        <label>
+          Appearance
+          <select id="appearance">
+            <option value="auto">auto</option>
+            <option value="light">light</option>
+            <option value="dark" selected>dark</option>
+          </select>
+        </label>
+        <label>
+          Theme
+          <select id="theme">
+            <option value="catppuccin-mocha">catppuccin-mocha</option>
+            <option value="catppuccin-latte">catppuccin-latte</option>
+            <option value="gruvbox-dark">gruvbox-dark</option>
+          </select>
+        </label>
+        <label>
+          Shadow
+          <select id="shadow">
+            <option value="small">small</option>
+            <option value="medium" selected>medium</option>
+            <option value="large">large</option>
+            <option value="false">none</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="tabs" checked /> Tabs</label>
+        <label><input type="checkbox" id="titlebar" checked /> Title bar</label>
+      </div>
+
+      <div id="framed"></div>
+
+      <h2>Kitty graphics</h2>
+      <p>
+        Placements are canvases in a DOM layer above the grid, so they can be
+        moved, refreshed and deleted individually. Scroll the terminal after
+        placing one: it stays anchored to the row that introduced it, which is
+        the <code>scrollback</code> default.
+      </p>
+
+      <div class="controls">
+        <button id="gfx-place">Place an image</button>
+        <button id="gfx-many">Place a row of them</button>
+        <button id="gfx-move">Move the last one</button>
+        <button id="gfx-clear">Delete all</button>
+        <button id="gfx-probe">Send a capability probe</button>
+      </div>
+
+      <h2>The terminal on its own</h2>
+      <p>
+        The same package with no chrome, no graphics and no fit observer, opened
+        into a plain container. This is what an embed costs when all you want is
+        a terminal.
+      </p>
+
+      <div class="controls">
+        <button id="bare-unicode">Write the unicode sample</button>
+        <button id="bare-colours">Write the colour sample</button>
+        <button id="bare-clear">Clear</button>
+      </div>
+
+      <div id="bare" class="webterm"></div>
+
+      <footer>
+        Built from <code>dist/</code>. Rebuild with <code>npm run build</code>
+        after changing anything under <code>src/</code>. MIT.
+      </footer>
+    </main>
+
+    <script src="../dist/webterm.standalone.global.js"></script>
+    <script src="../dist/webterm-chrome.standalone.global.js"></script>
+    <script src="./demo.js"></script>
+  </body>
+</html>

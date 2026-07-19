@@ -6,6 +6,7 @@ import type {
 } from '@xterm/xterm';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import type { ImageAddon } from '@xterm/addon-image';
 
 import { Clipboard, installCopyOnSelect, registerOsc52 } from './clipboard.js';
 import { Emitter } from './emitter.js';
@@ -47,6 +48,7 @@ export class WebTerm {
   private rendererManager?: RendererManager;
   private clipboard?: Clipboard;
   private overlay?: KittyGraphics;
+  private imageAddon?: ImageAddon;
   private container?: HTMLElement;
 
   private transport?: Transport;
@@ -230,6 +232,7 @@ export class WebTerm {
           kittySupport: false,
         } as never);
         term.loadAddon(addon);
+        this.imageAddon = addon;
         this.teardown.push(() => addon.dispose());
       } catch (error) {
         console.warn('webterm: image addon failed to load', error);
@@ -435,6 +438,17 @@ export class WebTerm {
   /** The kitty overlay, when graphics.kitty is enabled and supported. */
   get kitty(): KittyGraphics | undefined {
     return this.overlay;
+  }
+
+  /**
+   * The @xterm/addon-image instance, when graphics.sixel loaded it.
+   *
+   * Exposed for the same reason `xterm` is: the addon has its own API for
+   * storage limits and clearing, and it is dynamically imported here, so a
+   * consumer has no other way to reach the instance that is actually attached.
+   */
+  get image(): ImageAddon | undefined {
+    return this.imageAddon;
   }
 
   // --- IO -------------------------------------------------------------------

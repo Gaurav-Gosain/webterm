@@ -3,4 +3,7 @@ dist/
 test-results/
 playwright-report/
 *.tsbuildinfo
+
+# Screenshots the chrome suite writes. Output rather than fixtures: the suite
+# asserts geometry and colour itself and never compares against a stored image.
 test/screenshots/

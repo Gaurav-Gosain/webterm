@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>webterm, script tag</title>
+
+    <!--
+      The standalone build inlines xterm.js and every addon the default path can
+      reach, so this page needs one script and no bundler. Copy the three files
+      referenced here next to your HTML and it works off the filesystem.
+
+      From a CDN instead of a local copy:
+        <script src="https://unpkg.com/webterm/dist/webterm.standalone.global.js"></script>
+    -->
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="../../dist/webterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e2e;
+      }
+      /* The container needs a size. webterm fits the grid to whatever it is. */
+      #terminal {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- .webterm is the only class the package needs on the container. -->
+    <div id="terminal" class="webterm"></div>
+
+    <script src="../../dist/webterm.standalone.global.js"></script>
+    <script>
+      // The IIFE build publishes one global holding the module's exports. The
+      // class is renamed on the way out because a top-level `const WebTerm` in
+      // a classic script would collide with the global of the same name.
+      const { WebTerm: WebTermClass } = window.WebTerm;
+
+      const term = new WebTermClass({
+        fontSize: 14,
+        theme: 'catppuccin-mocha',
+      });
+
+      term.open(document.getElementById('terminal')).then(() => {
+        term.write('webterm is open, and connected to nothing.\r\n');
+        term.write('What you type is echoed back locally.\r\n\r\n$ ');
+
+        // With no transport attached, input arrives here and goes nowhere else.
+        // A real page would hand these bytes to a socket; see
+        // ../websocket-transport/ for that.
+        term.on('data', (bytes) => {
+          const text = new TextDecoder().decode(bytes);
+          // Enter arrives as CR, and a terminal does not move to column 0 on
+          // its own, so the LF has to be written too.
+          term.write(text === '\r' ? '\r\n$ ' : text);
+        });
+
+        term.focus();
+      });
+    </script>
+  </body>
+</html>
