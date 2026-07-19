@@ -2,6 +2,26 @@ export { WebTerm } from './webterm.js';
 export { themes, resolveTheme, type ThemeName } from './themes.js';
 export { KittyGraphics, type KittyGraphicsOptions } from './kitty/overlay.js';
 export {
+  ALL_KEYBOARD_FLAGS,
+  KEYBOARD_STACK_LIMIT,
+  KeyEventType,
+  KeyModifiers,
+  KeyboardFlags,
+  KeyboardModeStack,
+  KeyboardSetMode,
+  KittyKeyboard,
+  encodeKey,
+  encodeModifiers,
+  eventTypeOf,
+  needsCsi,
+  resolveKey,
+  type KeyEventTypeValue,
+  type KeyInput,
+  type KeySpec,
+  type KittyKeyboardOptions,
+  type ResolvedKey,
+} from './keyboard/index.js';
+export {
   Clipboard,
   decodeOsc52,
   encodeOsc52,

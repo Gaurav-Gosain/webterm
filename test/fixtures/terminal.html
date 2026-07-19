@@ -68,6 +68,15 @@
       window.term = term;
       window.WebTermClass = WebTerm;
 
+      // The data event carries bytes. A keyboard assertion is about an exact
+      // escape sequence, so it reads the decoded text and clears between steps
+      // rather than indexing into the byte log.
+      const decoder = new TextDecoder();
+      window.dataText = () => events.data.map((bytes) => decoder.decode(bytes)).join('');
+      window.clearData = () => {
+        events.data.length = 0;
+      };
+
       await term.open(document.getElementById('host'));
       window.ready = true;
     </script>

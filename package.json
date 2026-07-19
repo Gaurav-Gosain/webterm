@@ -37,7 +37,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:browser",
-    "test:unit": "node --test \"test/unit/*.test.ts\"",
+    "test:unit": "node --import ./test/register-ts.mjs --test \"test/unit/*.test.ts\"",
     "test:browser": "npm run build && playwright test",
     "check": "npm run typecheck && npm run build && npm run test:unit",
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""

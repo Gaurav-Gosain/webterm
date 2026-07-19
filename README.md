@@ -44,6 +44,8 @@ Every image below is the built package in a real browser: the terminals are real
 - Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout. It does not get that far unprompted: nothing here answers the `CSI 14 t` window-size report either, so icat has to be given the geometry with `--use-window-size`. See [docs/limits.md](docs/limits.md).
 - Repositions every placement on scroll, resize and font change, and anchors it either to the buffer row that introduced it (`scrollback`, the default) or to the visible grid (`viewport`, for a compositor that re-emits its placements each frame).
 - Moves the cursor past a placement as the protocol requires, right by its columns and down by its rows unless the sender asks for `C=1`, so the cells an image covers are consumed in the buffer rather than only painted over. `kitten icat` emits nothing but a trailing CR LF of its own and relies on the terminal for the rest.
+- Implements the kitty keyboard protocol, which xterm.js does not: full CSI u reporting with progressive enhancement, so an application can finally tell Ctrl+I from Tab, Ctrl+M from Enter and Esc from the start of an escape sequence, and can see key release, key repeat, the shifted and base-layout alternates, and the text a key produced.
+- Keeps every private xterm.js reach in one file, `src/kitty/xterm-adapter.ts`, with the degradation for each written down, so an xterm release that renames an internal is one file to read rather than a search. The keyboard protocol needs none of them and uses only published API.
 - Handles OSC 52 clipboard writes, which xterm.js registers no handler for, and decodes the payload as UTF-8 rather than as the Latin-1 string `atob` hands back.
 - Falls back to a hidden textarea and `document.execCommand('copy')` where `navigator.clipboard` is absent, which is every non-secure context: a LAN IP, an http reverse proxy, any deployment without TLS that is not localhost.
 - Retries a clipboard write refused for want of a user gesture on the next `pointerdown` or `keydown`, once, and reports `written: false` when every strategy was refused rather than failing silently.
@@ -323,6 +325,7 @@ Loads the fonts, constructs the `Terminal`, installs the providers and addons an
 | `element` | `HTMLElement \| undefined` | xterm's element |
 | `xterm` | `Terminal` | The underlying xterm instance. Throws before `open` |
 | `kitty` | `KittyGraphics \| undefined` | The overlay, when enabled and supported |
+| `keyboard` | `KittyKeyboard \| undefined` | The keyboard protocol, when enabled. `.flags` reports what the application turned on |
 | `image` | `ImageAddon \| undefined` | The image addon, when `graphics.sixel` loaded it |
 
 ### Events
@@ -350,7 +353,7 @@ Top level: `fontFamily`, `fontSize`, `fonts`, `lineHeight`, `theme`, `cursorBlin
 | `clipboard` | `osc52` (`true`), `osc52Read` (`false`), `copyOnSelect` (`false`), `write` |
 | `unicode` | `provider` (`'graphemes'`), `overrides` (`{ 0x200b: 0 }`) |
 | `graphics` | `kitty` (`true`), `sixel` (`false`) |
-| `keyboard` | `captureReservedKeys` (`true`), `reservedKeys` |
+| `keyboard` | `kitty` (`true`), `captureReservedKeys` (`true`), `reservedKeys`, `onKeyEvent` |
 | `mouse` | `suppressContextMenu` (`true`), `dedupeMotion` (`true`) |
 | `input` | `chunkBytes` (`65536`), `readOnly` (`false`) |
 
@@ -388,6 +391,62 @@ Under `scrollback` a placement is held by an xterm marker rather than a plain ro
 After a placement the cursor moves right by the placement's columns and down by its rows, scrolling the screen at the bottom exactly as text does. `C=1` suppresses it, and a virtual (`U=1`) or relative (`P`) placement never moves the cursor. The rectangle comes from `c` and `r` when the sender gives them, from one of them plus the source aspect ratio when only one is given, and otherwise from the transmitted pixel dimensions measured against the current cell box, which is the case `kitten icat` exercises.
 
 The movement is applied through xterm's input handler at the point in the stream where the placement was parsed, not queued with `term.write`. A write issued from inside a parser callback is appended to the write buffer and parsed after the remainder of the current chunk, and the bytes that follow an image, including icat's trailing CR LF and the next shell prompt, are in that same chunk.
+
+## Kitty keyboard
+
+Legacy terminal key encoding loses information. Ctrl+I and Tab are both `0x09`. Ctrl+M and Enter are both `0x0d`. Esc is `0x1b`, which is also the first byte of every escape sequence, so a program has to guess with a timeout. Most modifier combinations on most keys have no encoding at all, which is why Ctrl+Shift+key bindings do not work in a terminal. Key release is not reported, so nothing can implement hold-to-activate. xterm.js does not implement the protocol that fixes this, and that is why key handling in a browser terminal is lossy.
+
+The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) is implemented here in full, including progressive enhancement.
+
+```
+CSI ? u              query the flags in effect, answered CSI ? <flags> u
+CSI > <flags> u      push the current flags and adopt these
+CSI < <number> u     pop, defaulting to one entry
+CSI = <flags> ; <mode> u    set without touching the stack (1 replace, 2 add, 3 remove)
+```
+
+| Flag | Value | Effect |
+| --- | --- | --- |
+| Disambiguate | `1` | Esc, Ctrl+key, Alt+key and the keypad report as CSI u |
+| Report event types | `2` | Key repeat and key release, not only press |
+| Report alternate keys | `4` | The shifted key and the base-layout key alongside the key |
+| Report all keys | `8` | Every key as an escape code, including plain text |
+| Report associated text | `16` | The text the key produced, as codepoints |
+
+Enabling it in the options changes nothing on its own. The protocol is entirely application-driven: until a program pushes a non-zero flag set, every key is encoded exactly as it was before, byte for byte, by xterm. The encoder returns nothing for a key the flags do not claim, and xterm's own handling runs untouched, so there is no legacy encoding reimplemented here to drift out of agreement with the one xterm already gets right.
+
+```
+CSI > 1 u    then Ctrl+A sends    ESC [ 97 ; 5 u      rather than 0x01
+             and Esc sends        ESC [ 27 u          rather than 0x1b
+             while a plain 'a' is still 'a'
+
+CSI > 8 u    then 'a' sends       ESC [ 97 u
+             and Shift+A sends    ESC [ 57441 ; 2 u  ESC [ 97 ; 2 u
+
+CSI > 12 u   then Shift+A sends   ESC [ 97 : 65 ; 2 u
+CSI > 10 u   then releasing 'a' sends  ESC [ 97 ; 1 : 3 u
+```
+
+The two screens keep independent stacks, so a full-screen application that enables the protocol and is then suspended does not leave the shell it returns to in a mode the shell never asked for, and the alternate screen's state is discarded on the way out the same way its buffer is. The stack is bounded at 16 entries and drops from the bottom, so a program that pushes without popping cannot grow terminal memory without limit. Popping an empty stack lands on no enhancements rather than being ignored: a program confused about its own state is better off in the encoding every application can parse.
+
+Three details a browser forces:
+
+- **Caps lock is not shift.** A browser reports `key` as `'A'` for both, so the base key is recovered by lowercasing and the lock is reported through the modifier field instead. That is what lets an application tell a capital typed with caps lock from one typed with shift.
+- **The base-layout key comes from the physical key**, `KeyboardEvent.code`, not from the character. Lowercasing recovers `a` from `A`, but nothing recovers `1` from `!`. A Dvorak user pressing the key labelled Q on a US keyboard sends a base-layout code of `q`, so a binding on a physical position keeps working across layouts.
+- **Composition is never claimed.** `Dead`, `Process`, `Unidentified` and `Compose` pass straight through to xterm's composition helper, because the key that will eventually be produced is not known yet and swallowing the event breaks every non-Latin input method.
+
+Adding to it is meant to be small. The key tables in `src/keyboard/keys.ts` are data and the encoder names no key at all, so teaching it a key is a table row. Each flag is one branch in `src/keyboard/encoder.ts`. The flag state, the tables and the encoding are pure and free of DOM and xterm, so they are unit-tested directly; the wiring is confined to `src/keyboard/keyboard.ts`, which touches only published xterm API.
+
+xterm's `attachCustomKeyEventHandler` is a single slot rather than a list, and the protocol takes it. Pass `keyboard.onKeyEvent` to add a handler without displacing it; returning `false` from it stops the key reaching both the protocol and xterm.
+
+```ts
+new WebTerm({
+  keyboard: {
+    kitty: true,
+    onKeyEvent: (event) => !(event.ctrlKey && event.key === 'F'),
+  },
+});
+```
 
 ## Clipboard
 
@@ -451,7 +510,9 @@ npm run test:unit      # node's test runner, no browser
 npm run test:browser   # playwright against the system chromium
 ```
 
-48 unit tests cover the kitty protocol parser, the clipboard strategy selection and OSC 52 codec, the unicode override provider and the chrome presets, none of which need a DOM. 130 browser tests cover the rest: the terminal lifecycle and transports, the kitty overlay end to end (including reading pixels back off the placed canvas), the clipboard through both a real permission grant and a stubbed-out `navigator.clipboard`, the grapheme corpus, cell metrics and seams, and the chrome. All 178 pass on the tree this README documents.
+80 unit tests cover the kitty graphics protocol parser, the keyboard encoder and its mode stack, the clipboard strategy selection and OSC 52 codec, the unicode override provider and the chrome presets, none of which need a DOM. 148 browser tests cover the rest: the terminal lifecycle and transports, the kitty overlay end to end (including reading pixels back off the placed canvas), the keyboard protocol, the clipboard through both a real permission grant and a stubbed-out `navigator.clipboard`, the grapheme corpus, cell metrics and seams, and the chrome. All 228 pass on the tree this README documents.
+
+Every key in the keyboard suite is pressed through Playwright's keyboard, which goes through the browser's own input pipeline and produces trusted events, and every mode is set by writing the control sequence into the terminal the way an application sets it. A synthetic `dispatchEvent` would prove the encoder runs; it would not prove the key reaches it, that xterm's own handling was suppressed, or that the character is not also delivered a second time through the keypress path. Assertions are literal byte sequences, so a regression shows up as a diff of bytes.
 
 The browser tests start one process, a static file server for the fixtures, which Playwright owns and tears down. There is no application server, so a failed run leaves nothing behind. `WEBTERM_CHROMIUM` overrides the browser path. The chrome suite runs twice, at device pixel ratios 1 and 2, and writes preset screenshots to `test/screenshots/<project>/`; the frame is the one part of the package whose correctness is partly a question of where an edge lands on the device pixel grid, which is also why one of its tests samples the seams against a deliberately fractional container size.
 

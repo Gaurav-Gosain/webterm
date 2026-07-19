@@ -21,6 +21,7 @@ import {
   installReservedKeyCapture,
 } from './input.js';
 import { KittyGraphics } from './kitty/overlay.js';
+import { KittyKeyboard } from './keyboard/keyboard.js';
 import { RendererManager } from './renderer.js';
 import { resolveTheme, type ThemeName } from './themes.js';
 import { DEFAULT_OVERRIDES, installUnicodeOverrides } from './unicode.js';
@@ -48,6 +49,7 @@ export class WebTerm {
   private rendererManager?: RendererManager;
   private clipboard?: Clipboard;
   private overlay?: KittyGraphics;
+  private keyboardProtocol?: KittyKeyboard;
   private imageAddon?: ImageAddon;
   private container?: HTMLElement;
 
@@ -106,7 +108,7 @@ export class WebTerm {
     if (o.links) await this.installLinks(term);
 
     this.installClipboard(term, container);
-    this.installInputPolicy(container);
+    this.installInputPolicy(term, container);
     this.wireEvents(term);
     this.installFit(container);
 
@@ -274,12 +276,27 @@ export class WebTerm {
     );
   }
 
-  private installInputPolicy(container: HTMLElement): void {
+  private installInputPolicy(term: Terminal, container: HTMLElement): void {
     this.teardown.push(
       installContextMenuPolicy(container, () => ({
         suppressContextMenu: this.options.mouse?.suppressContextMenu ?? true,
       })),
     );
+
+    if (this.options.keyboard?.kitty ?? true) {
+      this.keyboardProtocol = new KittyKeyboard(term, {
+        // Read live, so setOptions can turn the terminal read-only without the
+        // protocol having to be torn down and reinstalled.
+        enabled: () => !this.options.input?.readOnly,
+        onKeyEvent: (event) => this.options.keyboard?.onKeyEvent?.(event) ?? true,
+      });
+    } else if (this.options.keyboard?.onKeyEvent) {
+      // Without the protocol nothing else has claimed xterm's single custom key
+      // handler slot, so a consumer's handler can take it directly.
+      term.attachCustomKeyEventHandler(
+        (event) => this.options.keyboard?.onKeyEvent?.(event) ?? true,
+      );
+    }
 
     const keys = installReservedKeyCapture({
       enabled: () => this.options.keyboard?.captureReservedKeys ?? true,
@@ -367,6 +384,7 @@ export class WebTerm {
     this.teardown.length = 0;
 
     this.overlay?.dispose();
+    this.keyboardProtocol?.dispose();
     this.rendererManager?.dispose();
     this.clipboard?.dispose();
     this.writer?.dispose();
@@ -446,6 +464,17 @@ export class WebTerm {
   }
 
   /**
+   * The kitty keyboard protocol, when keyboard.kitty is enabled.
+   *
+   * Exposed so a consumer can read the flags an application has enabled, which
+   * is the one piece of terminal state that changes how keys are encoded and is
+   * otherwise invisible.
+   */
+  get keyboard(): KittyKeyboard | undefined {
+    return this.keyboardProtocol;
+  }
+
+  /**
    * The @xterm/addon-image instance, when graphics.sixel loaded it.
    *
    * Exposed for the same reason `xterm` is: the addon has its own API for
@@ -473,6 +502,7 @@ export class WebTerm {
   reset(): void {
     this.terminal?.reset();
     this.overlay?.reset();
+    this.keyboardProtocol?.reset();
     this.motion.reset();
   }
 

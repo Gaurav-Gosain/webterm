@@ -81,6 +81,27 @@ export interface KeyboardOptions {
   captureReservedKeys?: boolean;
   /** Codes to lock. Default ['KeyW','KeyT','KeyN','KeyR','KeyL','Tab','Escape']. */
   reservedKeys?: string[];
+  /**
+   * The kitty keyboard protocol, which reports keys as CSI u sequences so an
+   * application can tell ctrl+i from Tab, see key release, and read modifiers
+   * on keys that have no legacy encoding for them. Default true.
+   *
+   * Enabling it changes nothing on its own. The protocol is entirely
+   * application-driven: until a program pushes a non-zero flag set with
+   * `CSI > flags u`, every key is encoded exactly as it was before, by xterm.
+   * Turning this off means a program's request to enable it goes unanswered and
+   * the terminal reports no support, which is the correct way to opt out.
+   */
+  kitty?: boolean;
+  /**
+   * Inspect every key event before the terminal does. Returning false stops the
+   * key reaching the kitty protocol and xterm both.
+   *
+   * xterm's own `attachCustomKeyEventHandler` is a single slot that webterm
+   * takes for the protocol, so this is the supported way to add a handler
+   * without displacing it.
+   */
+  onKeyEvent?(event: KeyboardEvent): boolean;
 }
 
 export interface MouseOptions {
