@@ -159,8 +159,31 @@ export class KittyGraphics {
   private readonly anchor: 'scrollback' | 'viewport';
   private readonly storageLimit: number;
 
-  /** Decoded images, keyed by the sender's image id. */
+  /** Decoded images, keyed by the resolved image id. */
   private readonly images = new Map<number, StoredImage>();
+  /**
+   * Image ids assigned to client-chosen image numbers (`I`).
+   *
+   * `i` and `I` are different namespaces. `i` is an id the client picks and
+   * the terminal must use as given; `I` is a number the client picks and the
+   * terminal must map to an id of its own choosing, echo back in its
+   * responses, and honour on any later command addressed by that number.
+   * Without this map every `I`-addressed image lands on id 0 and they
+   * overwrite each other, which is what `kitten icat` and yazi trip over
+   * since both address by number.
+   */
+  private readonly idByNumber = new Map<number, number>();
+  /**
+   * Next id to hand out for an image number. Kept well above the range a
+   * client is likely to choose for `i` so an assigned id cannot collide with
+   * one the client names itself.
+   */
+  private nextAssignedId = 0x7000_0000;
+  /**
+   * The key of the transmission most recently opened, so continuation chunks
+   * that carry no id keys at all still land on the right entry.
+   */
+  private lastTransmitKey: string | null = null;
   /**
    * Transmitted `s`/`v` pixel sizes, keyed by image id, recorded before the
    * decode settles so a placement can size itself synchronously.
@@ -285,6 +308,7 @@ export class KittyGraphics {
     this.placements.clear();
     for (const image of this.images.values()) this.closeBitmap(image.bitmap);
     this.images.clear();
+    this.idByNumber.clear();
     this.pixelSizes.clear();
     this.pending.clear();
     this.pendingPlacement.clear();
@@ -387,7 +411,7 @@ export class KittyGraphics {
    * dropped, since a client that gets no answer waits out its timeout instead
    * of moving on.
    */
-  private sendResponse(cmd: KittyCommand, message: string): void {
+  private sendResponse(cmd: KittyCommand, message: string, assignedId?: number): void {
     if (!this.respond) return;
 
     const quiet = cmd.q ?? 0;
@@ -396,7 +420,10 @@ export class KittyGraphics {
     if (quiet >= 1 && ok) return;
 
     const keys: string[] = [];
-    if (cmd.i !== undefined && cmd.i !== 0) keys.push(`i=${cmd.i}`);
+    // When the client addressed the image by number, report the id its number
+    // resolved to rather than the `i` it did not send.
+    const id = cmd.i !== undefined && cmd.i !== 0 ? cmd.i : assignedId;
+    if (id !== undefined && id !== 0) keys.push(`i=${id}`);
     if (cmd.I !== undefined && cmd.I !== 0) keys.push(`I=${cmd.I}`);
     if (keys.length === 0) return;
     if (cmd.p !== undefined && cmd.p !== 0) keys.push(`p=${cmd.p}`);
@@ -408,13 +435,49 @@ export class KittyGraphics {
     }
   }
 
+  // --- Image ids ------------------------------------------------------------
+
+  /**
+   * The image id a command addresses.
+   *
+   * An explicit `i` wins, since the client named it. Otherwise `I` is resolved
+   * through the number map, assigning an id on first sight when `assign` is
+   * set. A command carrying neither addresses image 0, which is the protocol's
+   * unaddressed default.
+   */
+  private resolveImageId(cmd: KittyCommand, assign: boolean): number {
+    if (cmd.i !== undefined && cmd.i !== 0) return cmd.i;
+    const number = cmd.I ?? 0;
+    if (!number) return 0;
+    const existing = this.idByNumber.get(number);
+    if (existing !== undefined) return existing;
+    if (!assign) return 0;
+    const assigned = this.nextAssignedId++;
+    this.idByNumber.set(number, assigned);
+    return assigned;
+  }
+
+  /** Forget the number pointing at `imageId`, once its data is freed. */
+  private forgetNumber(imageId: number): void {
+    for (const [number, id] of this.idByNumber) {
+      if (id === imageId) this.idByNumber.delete(number);
+    }
+  }
+
   // --- Transmit -------------------------------------------------------------
 
   private handleTransmit(cmd: KittyCommand, payload: string, andPlace: boolean): void {
     // Only direct base64 transmission is supported; see the header.
     if ((cmd.t ?? 'd') !== 'd') return;
 
-    const key = `i:${cmd.i ?? 0}`;
+    // A continuation chunk may carry no id keys at all, in which case it
+    // belongs to the transmission already in flight rather than to image 0.
+    const addressed = (cmd.i ?? 0) !== 0 || (cmd.I ?? 0) !== 0;
+    const key =
+      !addressed && this.lastTransmitKey && this.pending.has(this.lastTransmitKey)
+        ? this.lastTransmitKey
+        : `i:${this.resolveImageId(cmd, true)}`;
+    this.lastTransmitKey = key;
     let entry = this.pending.get(key);
     if (!entry) {
       entry = { params: { ...cmd }, chunks: [] };
@@ -446,7 +509,12 @@ export class KittyGraphics {
     const placementSpec = this.pendingPlacement.get(key);
     this.pendingPlacement.delete(key);
 
-    const imageId = params.i ?? 0;
+    this.lastTransmitKey = null;
+    const imageId = Number(key.slice(2));
+    // Tell the client which id its image number was given. A client that
+    // addresses by number has no other way to learn it, and one that is
+    // waiting on the acknowledgement will not place the image until it lands.
+    this.sendResponse({ ...params, i: params.i, I: params.I }, 'OK', imageId);
     if (params.s && params.v) {
       this.pixelSizes.set(imageId, { width: params.s, height: params.v });
     }
@@ -568,7 +636,9 @@ export class KittyGraphics {
   // --- Place ----------------------------------------------------------------
 
   private handlePlace(cmd: KittyCommand): void {
-    const imageId = cmd.i ?? 0;
+    // Resolve only: a place naming a number never transmitted has nothing to
+    // show, and assigning an id for it would strand the entry.
+    const imageId = this.resolveImageId(cmd, false);
     const spec: PlaceSpec = { cmd, anchor: this.cursorAnchor() };
 
     // Before anything else, and whether or not the image has arrived: the
@@ -719,12 +789,16 @@ export class KittyGraphics {
         if (freeData) {
           for (const image of this.images.values()) this.closeBitmap(image.bitmap);
           this.images.clear();
+          this.idByNumber.clear();
           this.pixelSizes.clear();
         }
         break;
       }
-      case 'i': {
-        const id = cmd.i ?? 0;
+      // 'i' addresses by image id, 'n' by image number; both land on the same
+      // resolved id, so they share this arm.
+      case 'i':
+      case 'n': {
+        const id = this.resolveImageId(cmd, false);
         for (const [k, p] of [...this.placements]) {
           if (p.imageId !== id) continue;
           this.detach(p);
@@ -735,11 +809,12 @@ export class KittyGraphics {
           if (image) this.closeBitmap(image.bitmap);
           this.images.delete(id);
           this.pixelSizes.delete(id);
+          this.forgetNumber(id);
         }
         break;
       }
       case 'p': {
-        const key = `${cmd.i ?? 0}/${cmd.p ?? 0}`;
+        const key = `${this.resolveImageId(cmd, false)}/${cmd.p ?? 0}`;
         const p = this.placements.get(key);
         if (p) {
           this.detach(p);
