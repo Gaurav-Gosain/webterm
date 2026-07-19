@@ -390,7 +390,12 @@ export class WebTerm {
     }
   }
 
-  /** Set the grid explicitly, and stop fitting until fit() is called again. */
+  /**
+   * Set the grid explicitly and stop fitting automatically.
+   *
+   * One-way for the life of the instance: fit() still refits once when called,
+   * but it does not re-arm the ResizeObserver path.
+   */
   resize(cols: number, rows: number): void {
     this.autoFit = false;
     this.terminal?.resize(cols, rows);
