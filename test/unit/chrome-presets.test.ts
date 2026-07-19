@@ -25,6 +25,15 @@ test('a bare string that names no preset is passed through as CSS', () => {
   );
 });
 
+test('an empty string falls back rather than painting nothing', () => {
+  // A select that has not been populated yet reads as '', and a frame with no
+  // background at all looks like a mistake rather than like `none`.
+  assert.equal(resolveBackground(''), backgrounds.aurora);
+  assert.equal(resolveBackground('   '), backgrounds.aurora);
+  // Asking for nothing on purpose still works.
+  assert.equal(resolveBackground('none'), backgrounds.none);
+});
+
 test('the tagged forms each resolve', () => {
   assert.equal(resolveBackground({ preset: 'noir' }), backgrounds.noir);
   assert.equal(resolveBackground({ color: '#fff' }), '#fff');

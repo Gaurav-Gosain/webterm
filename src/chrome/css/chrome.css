@@ -8,18 +8,61 @@
  * Every value a consumer might reasonably change is a custom property. The
  * `webterm` stem mirrors CSS_PREFIX in src/name.ts; renaming the package means
  * a rename here too.
+ *
+ * --- The material -----------------------------------------------------------
+ *
+ * The frame is glass over the stage rather than an opaque tray, which is the
+ * change macOS made in Tahoe and refined in the release after it. Four things
+ * carry that read, and all four are needed: none of them works alone.
+ *
+ *   1. A translucent fill with a blurred, saturated backdrop. The saturation
+ *      is what keeps the stage's colour blooming through instead of going
+ *      milky, and it is the part naive frosted glass leaves out.
+ *   2. A specular rim: a bright bevel on the top and left falling to a dark
+ *      one on the bottom and right, drawn as a masked gradient border so it
+ *      varies around the perimeter the way a lit edge does, rather than as one
+ *      even hairline.
+ *   3. One continuous band. The title bar and the tab strip are one surface
+ *      with no divider between them, the way a Tahoe toolbar is; the only
+ *      hairline left is where the glass meets the content.
+ *   4. Concentric radii. The tabs' corners are the window's radius minus their
+ *      inset, so the arcs share a centre instead of being two unrelated
+ *      roundings.
+ *
+ * The fill is deliberately opaque enough to read text on: Apple shipped an
+ * opacity control and raised the floor after the first release, and the same
+ * problem is worse here because the stage behind the frame is a consumer's
+ * arbitrary gradient or photograph. `--webterm-chrome-glass-fill` is that
+ * knob; lowering it past about 0.4 starts to cost the title its contrast.
  */
+
+/* Registered so the hover sweep interpolates. An unregistered custom property
+ * is a string to the animation machinery and snaps from one value to the
+ * other. */
+@property --webterm-chrome-sheen {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: -25%;
+}
 
 .webterm-chrome {
   /* Geometry. */
-  --webterm-chrome-radius: 10px;
+  --webterm-chrome-radius: 14px;
   --webterm-chrome-padding: 48px;
-  --webterm-chrome-titlebar-height: 38px;
+  --webterm-chrome-titlebar-height: 40px;
   --webterm-chrome-light-size: 12px;
   --webterm-chrome-light-gap: 8px;
-  --webterm-chrome-lights-inset: 13px;
-  --webterm-chrome-tabbar-height: 32px;
+  --webterm-chrome-lights-inset: 14px;
+  --webterm-chrome-tabbar-height: 34px;
   --webterm-chrome-content-padding: 0px;
+  /* The tab strip's own inset. Subtracting it from the window radius is what
+   * makes a tab's corner concentric with the window's rather than a second,
+   * unrelated arc. Floored so a square-cornered frame keeps square tabs. */
+  --webterm-chrome-tab-inset: 5px;
+  --webterm-chrome-tab-radius: max(
+    0px,
+    calc(var(--webterm-chrome-radius) - var(--webterm-chrome-tab-inset))
+  );
 
   /* Type. */
   --webterm-chrome-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
@@ -28,23 +71,42 @@
   --webterm-chrome-title-weight: 590;
 
   /* Light appearance, the base. The dark values are applied below, either by
-   * prefers-color-scheme when appearance is auto or by the data attribute. */
-  --webterm-chrome-frame: linear-gradient(180deg, #ecebec 0%, #dedcdd 100%);
-  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.16);
-  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.7);
-  --webterm-chrome-separator: rgba(0, 0, 0, 0.13);
-  --webterm-chrome-title-color: rgba(0, 0, 0, 0.62);
-  --webterm-chrome-tabbar: #e2e0e1;
-  --webterm-chrome-tab-color: rgba(0, 0, 0, 0.5);
-  --webterm-chrome-tab-active-color: rgba(0, 0, 0, 0.78);
-  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.85);
+   * prefers-color-scheme when appearance is auto or by the data attribute.
+   * They are a separate design rather than an inversion: dark glass takes a
+   * far dimmer rim than light glass, and a white rim at the light alpha reads
+   * as a drawn outline rather than as a lit edge. */
+  --webterm-chrome-glass-blur: 18px;
+  --webterm-chrome-glass-fill: 0.72;
+  /* One blur, shared by both bands, and no second blurred layer stacked on
+   * top of it: overlapping backdrop filters each force their own readback of
+   * everything behind them. The saturate is the cheap half of the pair and
+   * does most of the work. */
+  --webterm-chrome-glass: blur(var(--webterm-chrome-glass-blur)) saturate(180%);
+  --webterm-chrome-frame: rgba(247, 247, 250, var(--webterm-chrome-glass-fill));
+  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.19);
+  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.92);
+  --webterm-chrome-frame-lowlight: rgba(0, 0, 0, 0.17);
+  --webterm-chrome-frame-glow: rgba(255, 255, 255, 0.4);
+  --webterm-chrome-sheen-alpha: 0.5;
+  --webterm-chrome-separator: rgba(0, 0, 0, 0.11);
+  --webterm-chrome-title-color: rgba(0, 0, 0, 0.76);
+  /* A pale halo, not a drop shadow. Dark text on light glass only loses its
+   * edge where something dark shows through, and a light halo is what puts it
+   * back without dirtying the ordinary case. */
+  --webterm-chrome-title-halo: 0 0 3px rgba(255, 255, 255, 0.75);
+  --webterm-chrome-tabbar: var(--webterm-chrome-frame);
+  --webterm-chrome-tab-color: rgba(0, 0, 0, 0.55);
+  --webterm-chrome-tab-active-color: rgba(0, 0, 0, 0.84);
+  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.78);
+  --webterm-chrome-tab-active-ring: rgba(255, 255, 255, 0.95);
   --webterm-chrome-content-bg: #1e1e2e;
 
   --webterm-chrome-background: transparent;
   --webterm-chrome-shadow: none;
 
   /* The traffic light colours are the platform's, and are the same in light
-   * and dark. Each ring is the darker rim macOS draws around the fill. */
+   * and dark. Each ring is the darker rim macOS draws around the fill, and the
+   * dome is the off-centre highlight that stops them reading as flat dots. */
   --webterm-chrome-light-close: #ff5f57;
   --webterm-chrome-light-close-ring: #e0443e;
   --webterm-chrome-light-minimize: #febc2e;
@@ -53,6 +115,13 @@
   --webterm-chrome-light-maximize-ring: #1aab29;
   --webterm-chrome-light-inactive: #c8c8c8;
   --webterm-chrome-light-glyph: rgba(0, 0, 0, 0.55);
+  --webterm-chrome-light-dome: radial-gradient(
+    circle at 32% 26%,
+    rgba(255, 255, 255, 0.38) 0%,
+    rgba(255, 255, 255, 0.08) 38%,
+    rgba(255, 255, 255, 0) 58%,
+    rgba(0, 0, 0, 0.16) 100%
+  );
 
   --webterm-chrome-ease: cubic-bezier(0.23, 1, 0.32, 1);
 
@@ -74,33 +143,56 @@
   box-sizing: border-box;
 }
 
+/*
+ * Dark glass.
+ *
+ * Not the light values inverted. Dark glass sits over a stage that is usually
+ * darker than it, so its rim is the only thing separating the frame from the
+ * background and it has to be dim enough to read as a lit edge rather than as
+ * a stroke: a fifth of the light rim's alpha, and the lowlight goes up rather
+ * than down because a dark edge is what carries depth here. The fill runs
+ * slightly clearer than the light one because dark text is not the problem;
+ * light text on dark glass keeps its contrast further down.
+ */
 @media (prefers-color-scheme: dark) {
   /* Only when appearance is auto. An explicit light frame on a dark system
    * stays light, which is the whole point of setting it. */
   .webterm-chrome:not([data-appearance]) {
-    --webterm-chrome-frame: linear-gradient(180deg, #3a3a40 0%, #2f2f34 100%);
-    --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.6);
-    --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.09);
-    --webterm-chrome-separator: rgba(0, 0, 0, 0.45);
-    --webterm-chrome-title-color: rgba(255, 255, 255, 0.66);
-    --webterm-chrome-tabbar: #2a2a2f;
-    --webterm-chrome-tab-color: rgba(255, 255, 255, 0.5);
-    --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.86);
-    --webterm-chrome-tab-active: rgba(255, 255, 255, 0.1);
+    --webterm-chrome-glass-fill: 0.64;
+    --webterm-chrome-frame: rgba(40, 40, 46, var(--webterm-chrome-glass-fill));
+    --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.55);
+    --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.34);
+    --webterm-chrome-frame-lowlight: rgba(0, 0, 0, 0.45);
+    --webterm-chrome-frame-glow: rgba(255, 255, 255, 0.06);
+    --webterm-chrome-sheen-alpha: 0.14;
+    --webterm-chrome-separator: rgba(0, 0, 0, 0.4);
+    --webterm-chrome-title-color: rgba(255, 255, 255, 0.88);
+    --webterm-chrome-title-halo: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --webterm-chrome-tabbar: var(--webterm-chrome-frame);
+    --webterm-chrome-tab-color: rgba(255, 255, 255, 0.55);
+    --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.92);
+    --webterm-chrome-tab-active: rgba(255, 255, 255, 0.13);
+    --webterm-chrome-tab-active-ring: rgba(255, 255, 255, 0.16);
     --webterm-chrome-light-inactive: #4a4a4f;
   }
 }
 
 .webterm-chrome[data-appearance='dark'] {
-  --webterm-chrome-frame: linear-gradient(180deg, #3a3a40 0%, #2f2f34 100%);
-  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.6);
-  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.09);
-  --webterm-chrome-separator: rgba(0, 0, 0, 0.45);
-  --webterm-chrome-title-color: rgba(255, 255, 255, 0.66);
-  --webterm-chrome-tabbar: #2a2a2f;
-  --webterm-chrome-tab-color: rgba(255, 255, 255, 0.5);
-  --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.86);
-  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.1);
+  --webterm-chrome-glass-fill: 0.64;
+  --webterm-chrome-frame: rgba(40, 40, 46, var(--webterm-chrome-glass-fill));
+  --webterm-chrome-frame-ring: rgba(0, 0, 0, 0.55);
+  --webterm-chrome-frame-highlight: rgba(255, 255, 255, 0.34);
+  --webterm-chrome-frame-lowlight: rgba(0, 0, 0, 0.45);
+  --webterm-chrome-frame-glow: rgba(255, 255, 255, 0.06);
+  --webterm-chrome-sheen-alpha: 0.14;
+  --webterm-chrome-separator: rgba(0, 0, 0, 0.4);
+  --webterm-chrome-title-color: rgba(255, 255, 255, 0.88);
+  --webterm-chrome-title-halo: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --webterm-chrome-tabbar: var(--webterm-chrome-frame);
+  --webterm-chrome-tab-color: rgba(255, 255, 255, 0.55);
+  --webterm-chrome-tab-active-color: rgba(255, 255, 255, 0.92);
+  --webterm-chrome-tab-active: rgba(255, 255, 255, 0.13);
+  --webterm-chrome-tab-active-ring: rgba(255, 255, 255, 0.16);
   --webterm-chrome-light-inactive: #4a4a4f;
 }
 
@@ -115,23 +207,27 @@
   min-width: 0;
   min-height: 0;
   border-radius: var(--webterm-chrome-radius);
-  /* The window paints the frame colour, not the content colour, so the
-   * antialiased pixels at a rounded corner blend frame into content rather
-   * than exposing the decorative background through a hairline gap. */
-  background: var(--webterm-chrome-frame);
+  /* Transparent, so each band can take the stage as its own backdrop. The
+   * frame colour lives on the bands themselves; the window is only the shape,
+   * the shadow and the clip. */
+  background: transparent;
   box-shadow: var(--webterm-chrome-shadow);
-  /* Clips the content to the radius, and makes the window its own stacking
-   * context so a consumer's positioned content cannot escape the frame. */
+  /* Clips the bands to the radius. A rounded corner over glass has to be cut
+   * here rather than drawn per band, or the arc lands twice at slightly
+   * different subpixel positions. */
   overflow: hidden;
+  /* A stacking context, so a consumer's positioned content cannot paint over
+   * the rim. It does not become a backdrop root, so the bands still see the
+   * stage behind the window. */
   isolation: isolate;
 }
 
 /*
- * The hairline ring and the top highlight are an overlay rather than a border
- * or an outer box-shadow spread. A border would take a layout box and shift
- * the content by a fractional pixel at a non-integer device pixel ratio; a
- * spread shadow would sit under the content's own background at the corners.
- * An overlay with the same radius always lands exactly on the frame edge.
+ * The hairline ring and the inner glow are an overlay rather than a border or
+ * an outer box-shadow spread. A border would take a layout box and shift the
+ * content by a fractional pixel at a non-integer device pixel ratio; a spread
+ * shadow would sit under the content's own background at the corners. An
+ * overlay with the same radius always lands exactly on the frame edge.
  */
 .webterm-chrome-window::after {
   content: '';
@@ -142,7 +238,45 @@
   z-index: 2;
   box-shadow:
     inset 0 0 0 1px var(--webterm-chrome-frame-ring),
-    inset 0 1px 0 var(--webterm-chrome-frame-highlight);
+    /* The material lit from within, held to the top where the glass band is,
+     * so it does not wash the content below it. */ inset 0 14px 22px -14px
+      var(--webterm-chrome-frame-glow);
+}
+
+/*
+ * The specular rim.
+ *
+ * A masked gradient border rather than an even inset hairline, because a lit
+ * edge is not the same brightness the whole way round: it catches hardest on
+ * the top and the upper left, falls away down the sides, and picks up again as
+ * a dark edge at the bottom right where the glass turns away from the light.
+ * The mask cuts the interior out of a padded box, leaving exactly the one
+ * device-independent pixel of border.
+ */
+.webterm-chrome-window::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 3;
+  background: linear-gradient(
+    145deg,
+    var(--webterm-chrome-frame-highlight) 0%,
+    color-mix(in srgb, var(--webterm-chrome-frame-highlight) 28%, transparent) 26%,
+    transparent 48%,
+    var(--webterm-chrome-frame-lowlight) 74%,
+    color-mix(in srgb, var(--webterm-chrome-frame-lowlight) 45%, transparent) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
 }
 
 /* --- Title bar ----------------------------------------------------------- */
@@ -158,11 +292,29 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   height: var(--webterm-chrome-titlebar-height);
-  background: var(--webterm-chrome-frame);
-  /* Drawn as a shadow rather than a border: a border participates in layout
-   * and can round to a different device pixel than the box it sits on. */
-  box-shadow: inset 0 -1px 0 var(--webterm-chrome-separator);
+  /* The sheen rides over the fill as a background layer rather than as another
+   * element, so the glass stays one paint. */
+  background-color: var(--webterm-chrome-frame);
+  background-image: linear-gradient(
+    100deg,
+    transparent calc(var(--webterm-chrome-sheen) - 16%),
+    rgba(255, 255, 255, var(--webterm-chrome-sheen-alpha)) var(--webterm-chrome-sheen),
+    transparent calc(var(--webterm-chrome-sheen) + 16%)
+  );
+  -webkit-backdrop-filter: var(--webterm-chrome-glass);
+  backdrop-filter: var(--webterm-chrome-glass);
   user-select: none;
+}
+
+/* The one hairline left in the frame, where the glass band ends and the
+ * content begins. The title bar only draws it when no tab strip follows,
+ * because a divider inside the band is what the older frame looked like.
+ *
+ * Drawn as a shadow rather than a border: a border participates in layout and
+ * can round to a different device pixel than the box it sits on. */
+.webterm-chrome-titlebar:has(+ .webterm-chrome-content),
+.webterm-chrome-tabs {
+  box-shadow: inset 0 -1px 0 var(--webterm-chrome-separator);
 }
 
 .webterm-chrome-lights,
@@ -187,24 +339,38 @@
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: var(--webterm-chrome-light-inactive);
-  /* The rim, drawn inside so the circle keeps its exact diameter. */
-  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  /* Colour and dome are separate layers on purpose: the flat colour stays in
+   * background-color, which is where the platform value is legible to anyone
+   * reading the computed style, while the dome is an image over it. Folding
+   * both into one shorthand would replace the colour with a gradient. */
+  background-color: var(--webterm-chrome-light-inactive);
+  background-image: var(--webterm-chrome-light-dome);
+  /* The rim, drawn inside so the circle keeps its exact diameter, and a short
+   * drop so the light sits on the glass rather than in it. */
+  box-shadow:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.12),
+    0 0.5px 1px rgba(0, 0, 0, 0.16);
 }
 
 .webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='close'] {
-  background: var(--webterm-chrome-light-close);
-  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-close-ring);
+  background-color: var(--webterm-chrome-light-close);
+  box-shadow:
+    inset 0 0 0 0.5px var(--webterm-chrome-light-close-ring),
+    0 0.5px 1px rgba(0, 0, 0, 0.16);
 }
 
 .webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='minimize'] {
-  background: var(--webterm-chrome-light-minimize);
-  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-minimize-ring);
+  background-color: var(--webterm-chrome-light-minimize);
+  box-shadow:
+    inset 0 0 0 0.5px var(--webterm-chrome-light-minimize-ring),
+    0 0.5px 1px rgba(0, 0, 0, 0.16);
 }
 
 .webterm-chrome[data-focused='true'] .webterm-chrome-light[data-light='maximize'] {
-  background: var(--webterm-chrome-light-maximize);
-  box-shadow: inset 0 0 0 0.5px var(--webterm-chrome-light-maximize-ring);
+  background-color: var(--webterm-chrome-light-maximize);
+  box-shadow:
+    inset 0 0 0 0.5px var(--webterm-chrome-light-maximize-ring),
+    0 0.5px 1px rgba(0, 0, 0, 0.16);
 }
 
 button.webterm-chrome-light {
@@ -242,6 +408,10 @@ button.webterm-chrome-light:focus-visible {
   font-weight: var(--webterm-chrome-title-weight);
   letter-spacing: -0.01em;
   line-height: 1;
+  /* Glass is the one place a title can lose its contrast to something the
+   * consumer chose, so the halo is unconditional rather than a fallback. It
+   * costs nothing on a plain stage and rescues a busy one. */
+  text-shadow: var(--webterm-chrome-title-halo);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -259,10 +429,11 @@ button.webterm-chrome-light:focus-visible {
   display: flex;
   align-items: stretch;
   height: var(--webterm-chrome-tabbar-height);
-  padding: 4px 6px;
+  padding: var(--webterm-chrome-tab-inset) 6px;
   gap: 4px;
   background: var(--webterm-chrome-tabbar);
-  box-shadow: inset 0 -1px 0 var(--webterm-chrome-separator);
+  -webkit-backdrop-filter: var(--webterm-chrome-glass);
+  backdrop-filter: var(--webterm-chrome-glass);
   user-select: none;
   overflow-x: auto;
   scrollbar-width: none;
@@ -281,7 +452,9 @@ button.webterm-chrome-light:focus-visible {
   justify-content: center;
   padding: 0 12px;
   border: 0;
-  border-radius: 6px;
+  /* Concentric with the window: same centre as the frame's arc, inset by the
+   * strip's own padding. */
+  border-radius: var(--webterm-chrome-tab-radius);
   background: transparent;
   color: var(--webterm-chrome-tab-color);
   font-family: inherit;
@@ -293,9 +466,16 @@ button.webterm-chrome-light:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* The selected tab is a second, smaller pane of glass sitting on the strip,
+ * with its own lit top edge. Its fill is a flat colour rather than a second
+ * backdrop-filter: a blurred layer over a blurred layer is the one stacking
+ * that costs real frames, and at this size it would not read differently. */
 .webterm-chrome-tab[data-active='true'] {
   background: var(--webterm-chrome-tab-active);
   color: var(--webterm-chrome-tab-active-color);
+  box-shadow:
+    inset 0 1px 0 var(--webterm-chrome-tab-active-ring),
+    0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 button.webterm-chrome-tab {
@@ -362,10 +542,77 @@ button.webterm-chrome-tab:focus-visible {
     transform: scale(0.92);
     transition-duration: 90ms;
   }
+
+  /* The specular sweep: light travelling across the glass as the pointer
+   * arrives, the way a highlight moves on a real window when it does. It is a
+   * registered custom property feeding a gradient stop rather than an animated
+   * blur or position, so it stays on the compositor.
+   *
+   * Behind both queries deliberately. There is no reduced-motion variant of a
+   * moving highlight worth keeping: a user who asked for less motion gets the
+   * static glass, which is the same material without the travel. */
+  @media (hover: hover) and (pointer: fine) {
+    .webterm-chrome-titlebar {
+      transition: --webterm-chrome-sheen 900ms var(--webterm-chrome-ease);
+    }
+
+    .webterm-chrome-window:hover .webterm-chrome-titlebar {
+      --webterm-chrome-sheen: 125%;
+    }
+  }
 }
 
 @media (hover: hover) and (pointer: fine) {
   button.webterm-chrome-tab:hover:not([data-active='true']) {
     background: color-mix(in srgb, var(--webterm-chrome-tab-active) 45%, transparent);
+  }
+}
+
+/* --- When the glass is not wanted ---------------------------------------- */
+
+/*
+ * A reader who has asked for less transparency or more contrast gets the
+ * material as a solid, which is what the platform does with the same settings:
+ * the frame keeps its shape, its rim and its lights, and stops being see
+ * through. This is also the path a browser without backdrop-filter falls into
+ * by way of the @supports below, so it has to stand on its own as a design
+ * rather than as a degradation.
+ */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .webterm-chrome {
+    --webterm-chrome-glass: none;
+    --webterm-chrome-glass-fill: 1;
+    --webterm-chrome-sheen-alpha: 0;
+    --webterm-chrome-frame: #f2f2f5;
+    --webterm-chrome-tabbar: #e8e8ee;
+    --webterm-chrome-title-halo: none;
+  }
+
+  .webterm-chrome[data-appearance='dark'] {
+    --webterm-chrome-frame: #2b2b31;
+    --webterm-chrome-tabbar: #232329;
+  }
+}
+
+@media (prefers-color-scheme: dark) and (prefers-reduced-transparency: reduce) {
+  .webterm-chrome:not([data-appearance]) {
+    --webterm-chrome-frame: #2b2b31;
+    --webterm-chrome-tabbar: #232329;
+  }
+}
+
+@media (prefers-color-scheme: dark) and (prefers-contrast: more) {
+  .webterm-chrome:not([data-appearance]) {
+    --webterm-chrome-frame: #2b2b31;
+    --webterm-chrome-tabbar: #232329;
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  /* Without a backdrop filter the fill is all there is, and a fill that was
+   * chosen to be blurred through reads as a flat wash instead. Opaque is the
+   * honest answer. */
+  .webterm-chrome {
+    --webterm-chrome-glass-fill: 1;
   }
 }
