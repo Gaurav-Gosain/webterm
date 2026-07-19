@@ -2,7 +2,7 @@
 
 A small, embeddable browser terminal built on xterm.js.
 
-You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. It has zero runtime dependencies. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is 15 KB gzipped and nothing else is fetched by default.
+You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. It has zero runtime dependencies. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is 17.6 KB gzipped and nothing else is fetched by default.
 
 It is built to be taken apart. Transports are a three-method interface the package never looks inside; the clipboard write path, the unicode width table and the renderer choice are each one option; the underlying `Terminal` is public as `term.xterm`; and the window chrome is a separate entry point that imports nothing from the terminal, so a page that wants a frame around a code block does not download an emulator to get one.
 
@@ -35,7 +35,7 @@ It is built to be taken apart. Transports are a three-method interface the packa
 - Unopinionated. There is no framing, no protocol, no reconnect policy and no session model baked in. Bytes go in, bytes come out, and everything the terminal wants to tell the page arrives as an event.
 - Correct. The defaults that differ from convention (`lineHeight: 1`, `cursorBlink: false`, `osc52Read: false`, fonts awaited before construction) are each the result of a specific failure, and each one is documented where it is set.
 - Separable. The chrome, the transports, the kitty overlay, the clipboard, the unicode provider and the width table are separate modules with separate entry points, and each is usable or replaceable without the others.
-- Honest. The README and [docs/limits.md](docs/limits.md) state what is unimplemented, what depends on a prerelease of a peer dependency, what a reference emulator disagrees with, and which private field the overlay reaches into.
+- Honest. The README and [docs/limits.md](docs/limits.md) state what is unimplemented, what depends on a prerelease of a peer dependency, what a reference emulator disagrees with, and which private fields the overlay reaches into.
 
 ## Architecture
 
@@ -113,16 +113,32 @@ Mouse reports take a parallel route through xterm's `onBinary` and the `binary` 
 
 ## Quick start
 
+This package is not published to npm. The name `webterm` on the registry belongs
+to an unrelated project, so `npm install webterm` and any `unpkg.com/webterm`
+URL will fetch someone else's code, not this. Build it from a checkout instead:
+
+```bash
+git clone https://github.com/Gaurav-Gosain/webterm
+cd webterm
+npm install
+npm run build   # dist/: ESM entry points, both standalone bundles, the CSS
+```
+
+That produces everything the examples below import. To consume it from another
+project, either point at the checkout (`npm install /path/to/webterm`) or pack
+it (`npm pack`) and install the resulting tarball; the peer dependencies
+(`@xterm/xterm`, `@xterm/addon-fit`) are yours to install either way.
+
 ### A plain HTML page
 
-The standalone build inlines xterm.js and every addon, so this is one script tag with no build step and nothing fetched at runtime. Save it as a file and open it.
+The standalone build inlines xterm.js and every addon, so this is one script tag with no build step and nothing fetched at runtime. Copy `dist/webterm.standalone.global.js` and `dist/webterm.css` next to the file below, add `@xterm/xterm/css/xterm.css` from your own install, and open it.
 
 ```html
 <!doctype html>
 <html>
   <head>
-    <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm/css/xterm.css" />
-    <link rel="stylesheet" href="https://unpkg.com/webterm/dist/webterm.css" />
+    <link rel="stylesheet" href="./xterm.css" />
+    <link rel="stylesheet" href="./webterm.css" />
     <style>
       html, body { margin: 0; height: 100%; background: #1e1e2e; }
       #terminal { width: 100vw; height: 100vh; }
@@ -130,7 +146,7 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
   </head>
   <body>
     <div id="terminal" class="webterm"></div>
-    <script src="https://unpkg.com/webterm/dist/webterm.standalone.global.js"></script>
+    <script src="./webterm.standalone.global.js"></script>
     <script>
       // Renamed on the way out: a top-level `const WebTerm` in a classic
       // script would collide with the global of the same name.
@@ -156,8 +172,11 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
 ### From a bundler
 
 ```bash
-npm install webterm @xterm/xterm @xterm/addon-fit
+npm install /path/to/webterm @xterm/xterm @xterm/addon-fit
 ```
+
+The import specifier is still `webterm`, because that is the package name in
+`package.json`; only where it is installed from differs.
 
 ```ts
 import { WebTerm } from 'webterm';
@@ -331,7 +350,7 @@ new WebTerm({ graphics: { kitty: { anchor: 'scrollback', storageLimit: 128 } } }
 
 `scrollback` is the default and anchors a placement to the buffer row that introduced it, so the image scrolls away with its text. That is what a shell running an image viewer expects, and it is the right choice for a full-screen application too: the alternate screen has no scrollback, so there the anchoring row and the screen row are the same row. `viewport` pins a placement to the visible grid instead, for an inline compositor on the main screen that re-emits every placement each frame and would otherwise park images in scrollback history with its own newlines. `storageLimit` caps the decoded bitmaps retained before the least recently used is evicted, and an image with a live placement is never a candidate.
 
-Under `scrollback` a placement is held by an xterm marker rather than a plain row number, so it stays on its line as the scrollback fills and trims, and is dropped once that line is trimmed out of history. Placements belong to the screen they were made on: the alternate screen hides the main screen's images while it is up, and discards its own on the way out, as the protocol requires. `ESC[2J` clears placements, while the partial erases leave them alone.
+Under `scrollback` a placement is held by an xterm marker rather than a plain row number, so it stays on its line as the scrollback fills and trims, and is dropped once that line is trimmed out of history. Placements belong to the screen they were made on: the alternate screen hides the main screen's images while it is up, and discards its own on the way out, as the protocol requires. `ESC[2J` and `ESC[3J` clear placements, while the partial erases (`0J`, `1J`) leave them alone.
 
 ### Cursor movement
 
@@ -381,12 +400,12 @@ Build output, measured on the tree at hand with tsup 8 targeting es2022. The sta
 
 | File | Raw | Gzip | What it is |
 | --- | --- | --- | --- |
-| `dist/index.js` | 54.3 KB | 15.5 KB | ESM core, xterm external |
+| `dist/index.js` | 61.6 KB | 17.6 KB | ESM core, xterm external |
 | `dist/transport/index.js` | 6.6 KB | 2.0 KB | Both transports and the combinators |
 | `dist/chrome/index.js` | 12.9 KB | 3.9 KB | The window chrome |
 | `dist/webterm.css` | 1.3 KB | 0.6 KB | Container, scrollbar, overlay |
 | `dist/chrome.css` | 12.2 KB | 3.6 KB | The frame |
-| `dist/webterm.standalone.global.js` | 856 KB | 230 KB | Everything, xterm and all five addons inlined |
+| `dist/webterm.standalone.global.js` | 858 KB | 231 KB | Everything, xterm and all five addons inlined |
 | `dist/webterm-chrome.standalone.global.js` | 8.6 KB | 3.3 KB | The frame, for a script tag |
 
 The standalone bundle is large because an IIFE cannot code-split, so every dynamic import is inlined, including `@xterm/addon-image` at 76 KB, which the default options never load. A bundler build does not pay that: the addons stay dynamic imports and only the ones the options ask for are fetched.
@@ -401,7 +420,7 @@ npm run test:unit      # node's test runner, no browser
 npm run test:browser   # playwright against the system chromium
 ```
 
-48 unit tests cover the kitty protocol parser, the clipboard strategy selection and OSC 52 codec, the unicode override provider and the chrome presets, none of which need a DOM. 119 browser tests cover the rest: the terminal lifecycle and transports, the kitty overlay end to end (including reading pixels back off the placed canvas), the clipboard through both a real permission grant and a stubbed-out `navigator.clipboard`, the grapheme corpus, cell metrics and seams, and the chrome. All 167 pass on the tree this README documents.
+48 unit tests cover the kitty protocol parser, the clipboard strategy selection and OSC 52 codec, the unicode override provider and the chrome presets, none of which need a DOM. 130 browser tests cover the rest: the terminal lifecycle and transports, the kitty overlay end to end (including reading pixels back off the placed canvas), the clipboard through both a real permission grant and a stubbed-out `navigator.clipboard`, the grapheme corpus, cell metrics and seams, and the chrome. All 178 pass on the tree this README documents.
 
 The browser tests start one process, a static file server for the fixtures, which Playwright owns and tears down. There is no application server, so a failed run leaves nothing behind. `WEBTERM_CHROMIUM` overrides the browser path. The chrome suite runs twice, at device pixel ratios 1 and 2, and writes preset screenshots to `test/screenshots/<project>/`; the frame is the one part of the package whose correctness is partly a question of where an edge lands on the device pixel grid, which is also why one of its tests samples the seams against a deliberately fractional container size.
 

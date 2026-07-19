@@ -6,12 +6,14 @@
     <title>webterm, script tag</title>
 
     <!--
-      The standalone build inlines xterm.js and every addon the default path can
-      reach, so this page needs one script and no bundler. Copy the three files
-      referenced here next to your HTML and it works off the filesystem.
+      The standalone build inlines xterm.js and every addon, including ones the
+      default options never load, because an IIFE cannot code-split. So this page
+      needs one script and no bundler. Copy the three files referenced here next
+      to your HTML and it works off the filesystem.
 
-      From a CDN instead of a local copy:
-        <script src="https://unpkg.com/webterm/dist/webterm.standalone.global.js"></script>
+      There is no CDN copy: this package is not published to npm, and the name
+      `webterm` there belongs to an unrelated project. Build dist/ from a
+      checkout with `npm install && npm run build`.
     -->
     <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="../../dist/webterm.css" />
