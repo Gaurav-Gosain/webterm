@@ -25,6 +25,37 @@ export function solidRgba(width, height, [r, g, b, a = 255]) {
   return out;
 }
 
+/**
+ * Decode a PNG screenshot and read one horizontal scanline of it back as RGBA,
+ * using the page's own image decoder.
+ *
+ * A screenshot is the only way to see what is outside the renderer's canvas,
+ * and the package has no PNG library to read one with. The browser already has
+ * one, so the buffer goes back in and a row of pixels comes out. A row rather
+ * than the whole image because every pixel crosses the browser protocol as a
+ * number, and a full frame costs tens of seconds to move.
+ *
+ * `at` is a fraction of the image height, so a caller need not know the size.
+ */
+export async function readScanline(page, buffer, at = 0.5) {
+  return page.evaluate(
+    async ({ base64, at }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      const y = Math.min(canvas.height - 1, Math.floor(canvas.height * at));
+      const { data } = ctx.getImageData(0, y, canvas.width, 1);
+      return { width: canvas.width, height: canvas.height, y, row: Array.from(data) };
+    },
+    { base64: buffer.toString('base64'), at },
+  );
+}
+
 /** A kitty APC sequence, ready to write into the terminal. */
 export function apc(control, payload = '') {
   return `\x1b_G${control}${payload ? `;${payload}` : ''}\x1b\\`;
