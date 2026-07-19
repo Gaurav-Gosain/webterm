@@ -1,7 +1,7 @@
 {
   "name": "tuitest",
   "split": 3,
-  "tagline": "headless testing harness for terminal programs",
+  "tagline": "headless testing for terminal programs, in Go",
   "accent": "green",
   "motif": "cells",
   "meta": [
