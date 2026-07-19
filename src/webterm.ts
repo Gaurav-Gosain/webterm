@@ -38,6 +38,10 @@ import type {
 
 const DEFAULT_FIT_DEBOUNCE_MS = 50;
 
+// What @xterm/xterm reserves for its scrollbar when the element cannot be
+// measured. Only a fallback: the reservation is normally measured directly.
+const DEFAULT_SCROLLBAR_WIDTH = 14;
+
 export class WebTerm {
   private options: WebTermOptions;
   private readonly emitter = new Emitter<WebTermEvents>();
@@ -401,12 +405,76 @@ export class WebTerm {
 
   /** Measure the container and resize the grid to fit it. */
   fit(): void {
+    const geometry = this.proposeGeometry();
+    if (geometry) {
+      this.terminal?.resize(geometry.cols, geometry.rows);
+      return;
+    }
     try {
       this.fitAddon?.fit();
     } catch {
       // fit() throws when the container has no layout yet, which happens while
       // it is still hidden. The next observation will retry.
     }
+  }
+
+  /**
+   * The grid that fills the container, in cells.
+   *
+   * This is the fit addon's calculation with one correction. The addon always
+   * subtracts the scrollbar's width from the space it fits into, which is right
+   * for a scrollbar that takes layout width and wrong for one that floats over
+   * the content. @xterm/xterm 6.1 draws the second kind: its scrollable element
+   * spans the full container and the scrollbar is an overlay on top, so the
+   * reserved strip is never occupied. Fitting around it leaves a column of
+   * terminal background down the right edge that no application ever paints
+   * into, which is plainly visible whenever the running program's own
+   * background differs from the theme's, as a full-screen editor's does.
+   *
+   * The reservation is measured rather than assumed, so a build whose scrollbar
+   * really does take width still gets the space it needs.
+   *
+   * Returns undefined when the container has no layout yet or the cell has not
+   * been measured, which leaves the caller on the addon's own path.
+   */
+  private proposeGeometry(): { cols: number; rows: number } | undefined {
+    const term = this.terminal;
+    const container = this.container;
+    if (!term?.element || !container) return undefined;
+
+    const cell = term.dimensions?.css.cell;
+    if (!cell?.width || !cell.height) return undefined;
+
+    const containerStyle = getComputedStyle(container);
+    const width = parseFloat(containerStyle.width);
+    const height = parseFloat(containerStyle.height);
+    if (!(width > 0) || !(height > 0)) return undefined;
+
+    const style = getComputedStyle(term.element);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+
+    const available = width - padX - this.reservedScrollbarWidth();
+    return {
+      cols: Math.max(2, Math.floor(available / cell.width)),
+      rows: Math.max(1, Math.floor((height - padY) / cell.height)),
+    };
+  }
+
+  /** The horizontal space the scrollbar takes out of the grid, in CSS pixels. */
+  private reservedScrollbarWidth(): number {
+    const term = this.terminal;
+    if (!term) return 0;
+
+    const scrollbar = (term.options as { scrollbar?: { showScrollbar?: boolean; width?: number } })
+      .scrollbar;
+    if (term.options.scrollback === 0 || scrollbar?.showScrollbar === false) return 0;
+
+    // An overlay scrollbar leaves the scroller's content box at full width; one
+    // that takes layout width shrinks it by exactly the amount to reserve.
+    const viewport = term.element?.querySelector('.xterm-viewport') as HTMLElement | null;
+    if (!viewport?.offsetWidth) return scrollbar?.width ?? DEFAULT_SCROLLBAR_WIDTH;
+    return Math.max(0, viewport.offsetWidth - viewport.clientWidth);
   }
 
   /**

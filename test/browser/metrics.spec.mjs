@@ -13,7 +13,7 @@
 // wherever two rows meet.
 import { expect, test } from '@playwright/test';
 
-import { boot } from './helpers.mjs';
+import { boot, readScanline } from './helpers.mjs';
 
 /** xterm's own measured cell geometry, in CSS pixels. */
 function cellMetrics(page) {
@@ -240,6 +240,60 @@ test('a block-heavy fixture is captured for eyeballing', async ({ page }, testIn
   await page.locator('#host').screenshot({ path: file });
   await testInfo.attach('block-and-box-fixture.png', { path: file, contentType: 'image/png' });
   console.log(`block and box fixture written to ${file}`);
+});
+
+/**
+ * The width of the strip down the right edge of the container that a
+ * full-screen application's background does not reach, in CSS pixels.
+ *
+ * Measured from a screenshot rather than from the DOM, because the strip is
+ * outside the renderer's canvas and only a picture of the whole container shows
+ * it. The application paints every cell in one colour, so anything else at the
+ * right edge is space the grid never covered.
+ */
+async function rightEdgeStrip(page) {
+  const paint = [0, 95, 0];
+  await page.evaluate(async (colour) => {
+    const term = window.term;
+    // The alternate screen, every column painted: a full-screen editor.
+    let out = `\x1b[?1049h\x1b[2J\x1b[H\x1b[48;2;${colour.join(';')}m`;
+    for (let row = 1; row <= term.rows; row++) out += `\x1b[${row};1H${' '.repeat(term.cols)}`;
+    term.write(out);
+    await term.flush();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  }, paint);
+
+  const shot = await page.locator('#host').screenshot();
+  const { width, row } = await readScanline(page, shot);
+  const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
+
+  const isPaint = (x) =>
+    row[x * 4] === paint[0] && row[x * 4 + 1] === paint[1] && row[x * 4 + 2] === paint[2];
+  let x = width - 1;
+  while (x >= 0 && !isPaint(x)) x--;
+  return (width - 1 - x) / dpr;
+}
+
+test('the grid fills the container, leaving no strip down the right edge', async ({ page }) => {
+  // The fit reserved room for a scrollbar that floats over the content and
+  // never takes that room, so a band of terminal background sat down the right
+  // edge of every full-screen application. It reads as a vertical line whenever
+  // the application's own background differs from the theme's, which for an
+  // editor it almost always does.
+  //
+  // A grid of whole cells cannot always land exactly on the container's edge,
+  // so the bound is one cell: less than that is the remainder no integer grid
+  // can avoid, more than that is space that was reserved and wasted.
+  await bootCanvas(page);
+  const cellWidth = await page.evaluate(
+    () => window.term.xterm._core._renderService.dimensions.css.cell.width,
+  );
+
+  const strip = await rightEdgeStrip(page);
+  expect(
+    strip,
+    `${strip}px of the container is right of the grid, wider than one ${cellWidth}px cell`,
+  ).toBeLessThan(cellWidth);
 });
 
 test('the renderer preference is honoured and reported', async ({ page }) => {

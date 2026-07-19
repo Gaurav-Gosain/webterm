@@ -12,6 +12,12 @@ export class BatchedWriter {
   private pending: Uint8Array[] = [];
   private scheduled = false;
   private scratch = new Uint8Array(64 * 1024);
+  // Whether xterm still holds the scratch. term.write does not copy and does
+  // not parse before it returns: it queues the array and consumes it on a later
+  // task, sliced across as many tasks as its frame budget needs. Writing into
+  // the scratch again before that finishes rewrites bytes that are still queued,
+  // and the terminal renders the wrong ones.
+  private scratchBusy = false;
   private disposed = false;
   private frame = 0;
   private readonly term: Terminal;
@@ -47,14 +53,23 @@ export class BatchedWriter {
       let total = 0;
       for (const chunk of this.pending) total += chunk.length;
 
-      const combined =
-        total <= this.scratch.length ? this.scratch.subarray(0, total) : new Uint8Array(total);
+      // The scratch is only borrowed back once the previous loan has been
+      // parsed; a slow frame keeps it out and this batch allocates instead.
+      const reuse = !this.scratchBusy && total <= this.scratch.length;
+      const combined = reuse ? this.scratch.subarray(0, total) : new Uint8Array(total);
       let offset = 0;
       for (const chunk of this.pending) {
         combined.set(chunk, offset);
         offset += chunk.length;
       }
-      this.term.write(combined);
+      if (reuse) {
+        this.scratchBusy = true;
+        this.term.write(combined, () => {
+          this.scratchBusy = false;
+        });
+      } else {
+        this.term.write(combined);
+      }
     }
 
     this.pending.length = 0;
@@ -70,6 +85,7 @@ export class BatchedWriter {
     this.disposed = true;
     if (this.scheduled) cancelAnimationFrame(this.frame);
     this.scheduled = false;
+    this.scratchBusy = false;
     this.pending.length = 0;
   }
 }
