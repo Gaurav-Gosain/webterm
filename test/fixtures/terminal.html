@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webterm fixture</title>
+    <link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/dist/webterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e2e;
+      }
+      #host {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The fixture drives the built ESM bundle, not the source, so the suites
+      exercise what a consumer actually installs. Options come from the query
+      string so one page covers every case.
+    -->
+    <div id="host" class="webterm"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "@xterm/xterm": "/node_modules/@xterm/xterm/lib/xterm.mjs",
+          "@xterm/addon-fit": "/node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+          "@xterm/addon-webgl": "/node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs",
+          "@xterm/addon-canvas": "/node_modules/@xterm/addon-canvas/lib/xterm-addon-canvas.mjs",
+          "@xterm/addon-image": "/node_modules/@xterm/addon-image/lib/addon-image.mjs",
+          "@xterm/addon-web-links": "/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs"
+        }
+      }
+    </script>
+    <script type="module">
+      import { WebTerm } from '/dist/index.js';
+
+      const params = new URLSearchParams(location.search);
+      const options = {
+        fontFamily: params.get('font') ?? 'monospace',
+        fontSize: Number(params.get('fontSize') ?? 14),
+        renderer: { prefer: params.get('renderer') ?? 'auto' },
+        graphics: { kitty: { anchor: params.get('anchor') ?? 'scrollback' } },
+        clipboard: { copyOnSelect: params.get('copyOnSelect') === '1' },
+      };
+      if (params.get('cols') && params.get('rows')) {
+        options.cols = Number(params.get('cols'));
+        options.rows = Number(params.get('rows'));
+      }
+
+      const events = { data: [], binary: [], resize: [], title: [], bell: 0, clipboard: [], renderer: [] };
+      const term = new WebTerm(options);
+      term.on('data', (bytes) => events.data.push(bytes));
+      term.on('binary', (bytes) => events.binary.push(bytes));
+      term.on('resize', (size) => events.resize.push(size));
+      term.on('title', (title) => events.title.push(title));
+      term.on('bell', () => events.bell++);
+      term.on('clipboard', (event) => events.clipboard.push(event));
+      term.on('renderer', (renderer) => events.renderer.push(renderer));
+
+      window.events = events;
+      window.term = term;
+      window.WebTermClass = WebTerm;
+
+      await term.open(document.getElementById('host'));
+      window.ready = true;
+    </script>
+  </body>
+</html>
