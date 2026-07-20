@@ -146,9 +146,10 @@ Mouse reports take a parallel route through xterm's `onBinary` and the `binary` 
 
 ## Quick start
 
-This package is not published to npm. The name `webterm` on the registry belongs
-to an unrelated project, so `npm install webterm` and any `unpkg.com/webterm`
-URL will fetch someone else's code, not this. Build it from a checkout instead:
+This package is not published to npm yet. Note that the unscoped name `webterm`
+on the registry belongs to an unrelated project, so `npm install webterm` and
+any `unpkg.com/webterm` URL will fetch someone else's code, not this. The
+package is named `@gaurav-gosain/webterm`. Build it from a checkout:
 
 ```bash
 git clone https://github.com/Gaurav-Gosain/webterm
@@ -212,8 +213,8 @@ The import specifier is still `webterm`, because that is the package name in
 `package.json`; only where it is installed from differs.
 
 ```ts
-import { WebTerm } from 'webterm';
-import { webSocketTransport } from 'webterm/transport';
+import { WebTerm } from '@gaurav-gosain/webterm';
+import { webSocketTransport } from '@gaurav-gosain/webterm/transport';
 import '@xterm/xterm/css/xterm.css';
 import 'webterm/css';
 
@@ -253,7 +254,7 @@ term.attach({
 A rejection from `start` means the attach failed, which is what `fallback()` acts on. Wrap a transport in `reconnecting()` for exponential backoff (1000 ms, factor 1.5, capped at 30 s, five attempts by default), which rebuilds the transport through the factory each time rather than reusing a closed one:
 
 ```ts
-import { fallback, reconnecting, webSocketTransport, webTransportTransport } from 'webterm/transport';
+import { fallback, reconnecting, webSocketTransport, webTransportTransport } from '@gaurav-gosain/webterm/transport';
 
 term.attach(
   reconnecting(() =>
@@ -270,7 +271,7 @@ term.attach(
 ### With the window chrome
 
 ```ts
-import { createWindowChrome } from 'webterm/chrome';
+import { createWindowChrome } from '@gaurav-gosain/webterm/chrome';
 import 'webterm/chrome.css';
 
 const chrome = createWindowChrome({

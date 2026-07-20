@@ -1,5 +1,5 @@
 {
-  "name": "webterm",
+  "name": "@gaurav-gosain/webterm",
   "version": "0.1.0",
   "description": "An embeddable browser terminal built on xterm.js, with kitty graphics, a clipboard layer that works on insecure origins, and reference-checked unicode widths.",
   "license": "MIT",

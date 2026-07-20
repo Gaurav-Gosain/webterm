@@ -8,3 +8,6 @@ playwright-report/
 # Screenshots the chrome suite writes. Output rather than fixtures: the suite
 # asserts geometry and colour itself and never compares against a stored image.
 test/screenshots/
+
+# Agent working directory.
+.claude/
