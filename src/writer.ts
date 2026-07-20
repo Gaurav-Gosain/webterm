@@ -21,13 +21,19 @@ export class BatchedWriter {
   private disposed = false;
   private frame = 0;
   private readonly term: Terminal;
+  private readonly onWrite: (() => void) | undefined;
 
-  constructor(term: Terminal) {
+  constructor(term: Terminal, onWrite?: () => void) {
     this.term = term;
+    this.onWrite = onWrite;
   }
 
   write(data: Uint8Array | string): void {
     if (this.disposed) return;
+    // Announced on the way in rather than at flush time, so a watchdog knows
+    // there is unpainted data from the moment it arrives rather than a frame
+    // later.
+    this.onWrite?.();
     if (typeof data === 'string') {
       // Strings are handed to xterm directly: batching them would mean an
       // encode and a decode for no gain.

@@ -66,6 +66,7 @@ export type {
   MouseOptions,
   RendererKind,
   ReportOptions,
+  SyncOutputOptions,
   RendererOptions,
   ResizeEvent,
   Transport,
