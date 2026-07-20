@@ -129,6 +129,9 @@
       /** The rendered grid size of terminal `index`, in CSS pixels. */
       window.pixelSize = (index) => terms[index].pixelSize;
 
+      /** The grid size of terminal `index`, in cells, read at the moment of asking. */
+      window.size = (index) => ({ cols: terms[index].cols, rows: terms[index].rows });
+
       /** Number of kitty placements currently in the overlay of terminal `index`. */
       window.placements = (index) => terms[index].kitty?.placementCount ?? 0;
 

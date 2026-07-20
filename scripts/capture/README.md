@@ -45,5 +45,22 @@ The banner is byte-identical between runs. These are not: they contain a clock,
 live CPU and memory figures, and file mtimes. What is stable is the layout, the
 sizes and what is being demonstrated.
 
+Program configuration is pinned rather than inherited. btop runs against
+`btop.conf`, and eza against `eza/`, which is empty on purpose: with no theme
+file eza falls back to its built-in palette, and that palette is indexed ANSI
+rather than 24-bit colour. Indexed colour is what lets the terminal theme
+recolour one recording, dark under mocha and light under latte. A theme file
+makes eza emit fixed truecolour instead, which bypasses the palette and which no
+`ITheme` can touch, so the preset gallery came out in dark-tuned pastels in
+every window including the four on a near-white background. Pinning the config
+also stops whatever is in the operator's `~/.config` from deciding what the
+figures look like.
+
+The framed btop session fits its grid to the frame and starts btop at the size
+that measurement reports, rather than pinning a cols/rows pair next to a pixel
+size chosen separately. Those two numbers do not agree on their own, and when
+they disagree the program fills the grid while the grid leaves a strip of bare
+terminal background down the side of the window.
+
 Every process the script starts, the file server and the browser and each pty,
 is closed in a `finally`, on the failure path as well as the success path.

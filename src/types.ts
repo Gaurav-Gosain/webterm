@@ -137,6 +137,18 @@ export interface WebTermOptions {
   lineHeight?: number;
 
   theme?: ITheme | ThemeName;
+  /**
+   * Which way the default theme leans, for when no `theme` is given.
+   *
+   * The window chrome takes its own `appearance`, and the two used to be
+   * unrelated: a light frame with no theme set still got the dark default
+   * inside it, which is pale foreground text on a near-white background and is
+   * about as legible as it sounds. This is the smallest thing that ties them
+   * together. It only chooses the default, so an explicit `theme` still wins,
+   * and it stays inside the two built-in themes rather than reaching for the
+   * theme corpus, which would pull all of it into the main bundle.
+   */
+  appearance?: 'light' | 'dark';
   /** Default false: a blinking cursor repaints an otherwise idle terminal forever. */
   cursorBlink?: boolean;
   cursorStyle?: 'block' | 'underline' | 'bar';

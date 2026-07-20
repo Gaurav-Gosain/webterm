@@ -11,6 +11,11 @@ export default defineConfig([
       index: 'src/index.ts',
       'transport/index': 'src/transport/index.ts',
       'chrome/index': 'src/chrome/index.ts',
+      // The colour scheme corpus is its own entry point because it is two
+      // orders of magnitude larger than the code that uses it. A consumer who
+      // never imports it never downloads it, and the main entry's size is
+      // unchanged by its presence.
+      'themes/index': 'src/themes/index.ts',
     },
     format: ['esm'],
     target: 'es2022',

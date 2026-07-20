@@ -152,7 +152,7 @@ export class WebTerm {
       drawBoldTextInBrightColors: false,
       fastScrollSensitivity: 5,
       minimumContrastRatio: 1,
-      theme: resolveTheme(o.theme),
+      theme: resolveTheme(o.theme ?? (o.appearance === 'light' ? 'catppuccin-latte' : undefined)),
     };
     // Only when both are given: xterm validates cols and rows as numeric and
     // rejects an explicit undefined, so the keys have to be absent rather than
@@ -646,6 +646,13 @@ export class WebTerm {
     if (options.cursorStyle !== undefined) term.options.cursorStyle = options.cursorStyle;
     if (options.scrollback !== undefined) term.options.scrollback = options.scrollback;
     if (options.theme !== undefined) this.setTheme(options.theme);
+    // Only when the caller has not pinned a theme of their own, here or
+    // earlier: appearance picks the default and never overrides a choice.
+    else if (options.appearance !== undefined && this.options.theme === undefined) {
+      term.options.theme = resolveTheme(
+        options.appearance === 'light' ? 'catppuccin-latte' : 'catppuccin-mocha',
+      );
+    }
     if (options.xterm) Object.assign(term.options, options.xterm);
     if (options.keyboard) this.syncReservedKeys?.();
     if (options.fontSize !== undefined || options.fontFamily !== undefined) this.fit();
