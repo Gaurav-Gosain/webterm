@@ -1,4 +1,5 @@
 import type { ITerminalAddon, Terminal } from '@xterm/xterm';
+import { installRoundedCellWidth } from './cell-metrics.js';
 import type { RendererKind, RendererOptions } from './types.js';
 
 /**
@@ -90,6 +91,7 @@ export class RendererManager {
       }
       this.term.loadAddon(addon as unknown as ITerminalAddon);
       this.addon = addon as unknown as ITerminalAddon;
+      installRoundedCellWidth(addon, this.term);
       this.settle('webgl');
       return true;
     } catch (error) {
@@ -105,6 +107,7 @@ export class RendererManager {
       const addon = new CanvasAddon();
       this.term.loadAddon(addon);
       this.addon = addon;
+      installRoundedCellWidth(addon, this.term);
       this.settle('canvas');
       return true;
     } catch (error) {

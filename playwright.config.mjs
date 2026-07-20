@@ -75,7 +75,7 @@ export default defineConfig({
       // them, and a fractional cell box rounds differently at each ratio, so
       // they are checked at both.
       name: 'chromium-dpr2',
-      testMatch: /(chrome|kitty-placeholders|halfblock)\.spec\.mjs/,
+      testMatch: /(chrome|kitty-placeholders|halfblock|metrics)\.spec\.mjs/,
       use: {
         baseURL: BASE_URL,
         deviceScaleFactor: 2,

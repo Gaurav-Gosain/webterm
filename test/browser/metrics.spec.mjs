@@ -303,3 +303,31 @@ test('the renderer preference is honoured and reported', async ({ page }) => {
   // be no renderer canvas at all.
   expect(await page.locator('#host canvas').count()).toBe(0);
 });
+
+test('the atlas cell is the nearest device pixel to the advance, not the floor', async ({
+  page,
+}) => {
+  // Both atlas renderers compute device.char.width as
+  // Math.floor(advance * dpr), and the atlas rasterises every glyph into a box
+  // of exactly that width, so on a fractional advance every column comes out up
+  // to a device pixel narrow and glyphs drawn to the full advance -- powerline
+  // separators, box and block glyphs, Nerd Font icons -- lose their right edge.
+  // src/cell-metrics.ts corrects it by giving the renderer a char size service
+  // that reports an advance floors to the rounded device width. See that file
+  // for why letterSpacing is not a substitute and why round beats ceil.
+  await bootCanvas(page);
+  const m = await page.evaluate(() => {
+    const core = window.term.xterm._core;
+    return {
+      dpr: window.devicePixelRatio,
+      advanceCss: core._charSizeService.width,
+      deviceCellWidth: core._renderService.dimensions.device.cell.width,
+    };
+  });
+
+  // The core's own service must still report the real advance: layout,
+  // selection and the kitty overlay all measure through it.
+  const exact = m.advanceCss * m.dpr;
+  expect(m.deviceCellWidth).toBe(Math.round(exact));
+  expect(Math.abs(m.deviceCellWidth - exact)).toBeLessThanOrEqual(0.5);
+});
