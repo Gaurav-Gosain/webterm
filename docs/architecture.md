@@ -17,6 +17,7 @@ flowchart LR
     WR[writer.ts<br/>frame batching]
     IN[input.ts<br/>chunk, dedup, key policy]
     CL[clipboard.ts<br/>strategies, OSC 52]
+    RP[reports.ts<br/>geometry, DECRQSS, XTGETTCAP]
     UN[unicode.ts<br/>override provider]
     RE[renderer.ts<br/>probe and fall through]
     FO[fonts.ts<br/>FontFace preload]
@@ -30,7 +31,7 @@ flowchart LR
   end
 
   A --> WT
-  WT --> WR & IN & CL & UN & RE & FO & TH & EM
+  WT --> WR & IN & CL & RP & UN & RE & FO & TH & EM
   WT --> KO --> KP
   B --> WT
   C --> EM
@@ -38,7 +39,7 @@ flowchart LR
 
 `src/emitter.ts` is the only file both the terminal and the chrome import, and it is 42 lines of typed listener bookkeeping with no DOM in it. `src/name.ts` is the second shared file: two constants, the UMD global name and the CSS prefix, so renaming the package is a change to two lines plus `package.json`.
 
-The kitty protocol parser ([`src/kitty/protocol.ts`](../src/kitty/protocol.ts)) is deliberately free of any DOM or xterm reference, which is what lets `test/unit/kitty-protocol.test.ts` exercise control-string parsing, RGB expansion, short-buffer fitting and source-rectangle clamping in node with no browser at all. The same split gives `src/unicode.ts` and the strategy half of `src/clipboard.ts` their unit tests.
+The kitty protocol parser ([`src/kitty/protocol.ts`](../src/kitty/protocol.ts)) is deliberately free of any DOM or xterm reference, which is what lets `test/unit/kitty-protocol.test.ts` exercise control-string parsing, RGB expansion, short-buffer fitting and source-rectangle clamping in node with no browser at all. The same split gives `src/unicode.ts`, the reply builders in `src/reports.ts` and the strategy half of `src/clipboard.ts` their unit tests.
 
 ## Lifecycle
 

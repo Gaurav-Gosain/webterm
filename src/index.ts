@@ -44,6 +44,16 @@ export {
   parseMouseEvent,
   type MouseReport,
 } from './input.js';
+export {
+  DEFAULT_TERMINAL_NAME,
+  GEOMETRY_WINDOW_OPTIONS,
+  decscusrParam,
+  decscusrStyle,
+  installTerminalReports,
+  xtgettcapReply,
+  type TerminalReports,
+  type TerminalReportsOptions,
+} from './reports.js';
 export { PACKAGE_GLOBAL, CSS_PREFIX } from './name.js';
 export type {
   ClipboardEvent,
@@ -55,6 +65,7 @@ export type {
   KittyOptions,
   MouseOptions,
   RendererKind,
+  ReportOptions,
   RendererOptions,
   ResizeEvent,
   Transport,

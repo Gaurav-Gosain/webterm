@@ -41,11 +41,12 @@ Every image below is the built package in a real browser: the terminals are real
 
 - Renders the kitty graphics protocol as absolutely positioned DOM canvases in a layer above the grid, rather than baking placements into the cell buffer as `@xterm/addon-image` does, so a placement can be moved, refreshed and deleted individually.
 - Implements the kitty actions `a=t`, `a=T`, `a=p`, `a=d` and `a=q`; direct base64 transmission (`t=d`); formats 24 (RGB), 32 (RGBA) and 100 (PNG, decoded through `createImageBitmap`); zlib payloads (`o=z`) through `DecompressionStream`; chunked transmission (`m=1`); and deletion by image id or placement id.
-- Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout. It does not get that far unprompted: nothing here answers the `CSI 14 t` window-size report either, so icat has to be given the geometry with `--use-window-size`. See [docs/limits.md](docs/limits.md).
+- Answers `a=q` capability probes, `OK` for direct transmission and `ENOTSUPPORTED` for the temp-file and shared-memory media, which is what lets `kitten icat` settle on stream mode instead of waiting out its detection timeout.
 - Repositions every placement on scroll, resize and font change, and anchors it either to the buffer row that introduced it (`scrollback`, the default) or to the visible grid (`viewport`, for a compositor that re-emits its placements each frame).
 - Moves the cursor past a placement as the protocol requires, right by its columns and down by its rows unless the sender asks for `C=1`, so the cells an image covers are consumed in the buffer rather than only painted over. `kitten icat` emits nothing but a trailing CR LF of its own and relies on the terminal for the rest.
 - Implements the kitty keyboard protocol, which xterm.js does not: full CSI u reporting with progressive enhancement, so an application can finally tell Ctrl+I from Tab, Ctrl+M from Enter and Esc from the start of an escape sequence, and can see key release, key repeat, the shifted and base-layout alternates, and the text a key produced.
 - Keeps every private xterm.js reach in one file, `src/kitty/xterm-adapter.ts`, with the degradation for each written down, so an xterm release that renames an internal is one file to read rather than a search. The keyboard protocol needs none of them and uses only published API.
+- Answers the geometry and capability queries an application sends before it decides what to emit: `CSI 14 t`, `CSI 16 t` and `CSI 18 t` for the text area and cell box, DECRQSS for the cursor style, and XTGETTCAP for the terminal name. See [Terminal reports](#terminal-reports).
 - Handles OSC 52 clipboard writes, which xterm.js registers no handler for, and decodes the payload as UTF-8 rather than as the Latin-1 string `atob` hands back.
 - Falls back to a hidden textarea and `document.execCommand('copy')` where `navigator.clipboard` is absent, which is every non-secure context: a LAN IP, an http reverse proxy, any deployment without TLS that is not localhost.
 - Retries a clipboard write refused for want of a user gesture on the next `pointerdown` or `keydown`, once, and reports `written: false` when every strategy was refused rather than failing silently.
@@ -357,6 +358,7 @@ Top level: `fontFamily`, `fontSize`, `fonts`, `lineHeight`, `theme`, `cursorBlin
 | `keyboard` | `kitty` (`true`), `captureReservedKeys` (`true`), `reservedKeys`, `onKeyEvent` |
 | `mouse` | `suppressContextMenu` (`true`), `dedupeMotion` (`true`) |
 | `input` | `chunkBytes` (`65536`), `readOnly` (`false`) |
+| `reports` | `terminalName` (`'xterm-256color'`), answered to XTGETTCAP `TN` |
 
 Plus two escape hatches: `xterm`, a raw `ITerminalOptions` merged last so it wins over everything the wrapper decided, and `onTerminalCreated(term)`, called with the `Terminal` after construction and before `open`.
 
@@ -504,6 +506,26 @@ The shipped table has exactly one entry, `{ 0x200b: 0 }`. `src/unicode.ts` recor
 
 The table was checked against ghostty-vt, driven with mode 2027 clustering enabled: 45 cases, 39 agreeing and 6 diverging. Those six are listed in [docs/limits.md](docs/limits.md) rather than papered over. ghostty-vt is not a dependency and must not become one; it was the oracle, and the numbers are what ship.
 
+## Terminal reports
+
+An application asks the terminal what it is before it decides what to send. Those queries are answered here, in `src/reports.ts`, entirely through published `term.parser` API: xterm's parser runs a handler registered after construction before its own, and a handler that returns false falls through to it, so a single sequence can be corrected without displacing anything else.
+
+| Query | Reply | Where it comes from |
+| --- | --- | --- |
+| `CSI 14 t` | `CSI 4 ; height ; width t` | The text area in CSS pixels |
+| `CSI 16 t` | `CSI 6 ; height ; width t` | One cell in CSS pixels |
+| `CSI 18 t` | `CSI 8 ; rows ; cols t` | The grid in cells |
+| `DCS $ q SP q ST` | `DCS 1 $ r Ps SP q ST` | The cursor style the application set |
+| `DCS + q 544e ST` | `DCS 1 + r 544E=... ST` | `reports.terminalName` |
+
+The three geometry reports are xterm.js's own implementation, switched on. xterm gates the whole of `CSI t` behind `options.windowOptions`, which defaults to everything off, because the same sequence family can raise, move, resize and retitle a window and it will not let a remote program do that unasked. The gate is applied to handlers registered from outside as well, so opening it is not merely the shortest way to answer these three, it is the only one. webterm opens exactly those three and nothing else: `CSI 1 t`, `CSI 3 ; x ; y t`, `CSI 9 t` and the title stack stay the no-ops they are by default, which a test asserts by writing each of them and requiring silence.
+
+DECRQSS for the cursor style is a correction rather than an addition. xterm.js answers it from `options.cursorStyle` and `options.cursorBlink`, but `CSI Ps SP q` writes to `coreService.decPrivateModes` and never touches the options, so the reply describes the cursor the embedder configured instead of the one the application asked for and the one on screen. The application's DECSCUSR is tracked here and the reply is built from it, falling back to the options exactly as the renderer does when the application has set none. RIS and DECSTR clear it, as they clear the private mode it shadows. Every other DECRQSS setting falls through to xterm untouched.
+
+XTGETTCAP has no implementation in xterm.js at all, so the request is parsed and discarded and the application waits out its timeout. `TN` and the colour count are answered; anything else is left unanswered rather than refused with `DCS 0 + r`, because a refusal is a claim that the terminal lacks the capability and what is true here is only that this layer does not know. An application that gets no answer reads its terminfo entry, which does. `reports.terminalName` defaults to `xterm-256color` and should be set to whatever the pty is started with, since a frontend does not get to choose TERM.
+
+The OSC colour queries (`OSC 4 ; n ; ?`, `OSC 10 ; ?`, `OSC 11 ; ?`, `OSC 12 ; ?`) are answered by xterm.js itself, out of its theme service, and nothing is added here on purpose. The theme service is the live resolved palette: it tracks a theme set through `setTheme`, including one out of the corpus, and also a palette an application changes at runtime with an `OSC 4` set, which `options.theme` does not. A second handler reading the options would be a staler answer to the same question. `test/browser/reports.spec.mjs` asserts the replies against a corpus theme rather than trusting that.
+
 ## Window chrome
 
 `webterm/chrome` is an optional macOS-style frame: rounded corners, a title bar with traffic lights, an optional title and tabs, a layered shadow, and a decorative background with padding behind it. It imports nothing from the terminal, so it works around any content and a consumer who does not want it never loads it.
@@ -585,8 +607,8 @@ See [docs/architecture.md](docs/architecture.md) for what each module owns, [doc
 The short version; the full one is [docs/limits.md](docs/limits.md).
 
 - Kitty graphics need `term.parser.registerApcHandler`, which is absent from `@xterm/xterm` 5.5.0 and from 6.0.0, the current stable. Only the `6.1.0-beta.*` line has it. The overlay feature-detects and warns rather than throwing.
-- Nothing answers the `CSI 14 t` and `CSI 16 t` window-size reports, so `kitten icat` refuses to send an image until it is given the geometry with `--use-window-size`. Fixable here, and not yet fixed.
-- The kitty keyboard protocol is not available at all, because the encoding happens inside xterm's own key handler.
+- `kitten icat` reads the pixel geometry from the pty's winsize and never sends `CSI 14 t`, so answering that report does not on its own let it discover the size. The pty host has to set the pixel fields, which is what the `pixel` figure on the `resize` event is for.
+- The colon SGR five-argument shorthand `38:2:R:G:B` is misparsed by xterm.js into the wrong colour. The six-argument form `38:2::R:G:B` and the semicolon form are both correct. It cannot be fixed from outside xterm and belongs upstream.
 - Both atlas renderers floor the device cell width, upstream, so a fractional advance loses a fraction of a device pixel per cell at a device pixel ratio above 1.
 - Reserved key capture works only in fullscreen, because that is the only state `navigator.keyboard.lock` is granted in.
 - A clipboard write can still be refused outright, and Safari is stricter than Chromium.

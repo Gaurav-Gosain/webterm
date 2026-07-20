@@ -6,6 +6,14 @@
 //   node scripts/vtconf/run.mjs --case cup-basic
 //   node scripts/vtconf/run.mjs --verbose       print every divergence in full
 //
+// By default the xterm side is bare @xterm/headless, which is what the package
+// takes as a peer dependency. --webterm measures what the package actually
+// ships instead: the same XTWINOPS gate webterm opens and the same report
+// handlers it registers. That side is TypeScript source, so it needs the loader
+// the unit suite uses:
+//
+//   node --import ./test/register-ts.mjs scripts/vtconf/run.mjs --webterm
+//
 // Each case is run on a fresh terminal on both sides, so no case can
 // contaminate the next.
 
@@ -26,6 +34,16 @@ const VERBOSE = flag('--verbose');
 const ONLY = opt('--only');
 const CASE = opt('--case');
 const JSON_OUT = opt('--json');
+const WEBTERM = flag('--webterm');
+
+/**
+ * webterm's report layer, or null when measuring bare xterm.js.
+ *
+ * Imported from source rather than from dist so the harness measures the tree
+ * at hand and not the last build. The import is dynamic because it only
+ * resolves under the TypeScript loader.
+ */
+const LAYER = WEBTERM ? await import('../../src/reports.ts') : null;
 
 const DEFAULT_COLS = 20;
 const DEFAULT_ROWS = 6;
@@ -77,7 +95,7 @@ async function runCase(mod, c) {
   const rows = c.rows ?? DEFAULT_ROWS;
 
   const g = new GhosttyTerm(mod, cols, rows);
-  const x = new XtermTerm(cols, rows);
+  const x = new XtermTerm(cols, rows, { layer: LAYER });
   await x.initUnicode();
 
   const res = { name: c.name, cat: c.cat, cols, rows };
@@ -216,7 +234,7 @@ function fmt(v) {
 /** Run one query case and compare what each emulator replies up the pty. */
 async function runQuery(mod, c) {
   const g = new GhosttyTerm(mod, 20, 6);
-  const x = new XtermTerm(20, 6);
+  const x = new XtermTerm(20, 6, { layer: LAYER });
   await x.initUnicode();
   const res = { name: c.name, cat: 'query' };
   try {
@@ -294,6 +312,7 @@ async function main() {
   const limited = results.filter((r) => r.harnessLimited);
 
   console.log('');
+  console.log(`xterm side: ${WEBTERM ? 'webterm on @xterm/headless' : 'bare @xterm/headless'}`);
   console.log(`cases run: ${results.length}`);
   console.log(`agree:     ${results.length - diverged.length}`);
   console.log(`diverge:   ${diverged.length}`);
