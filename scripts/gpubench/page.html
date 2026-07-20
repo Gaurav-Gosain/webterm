@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>gpubench</title>
+<link rel="stylesheet" href="/xterm.css" />
+<style>
+  html, body { margin: 0; background: #101010; color: #d0d0d0; }
+  #stage { display: grid; gap: 2px; }
+  #stage.panes-1 { grid-template-columns: 1fr; }
+  #stage.panes-8 { grid-template-columns: repeat(4, 1fr); }
+  canvas, .pane { display: block; max-width: 100%; }
+</style>
+<div id="stage" class="panes-1"></div>
+<script type="module" src="/app.mjs"></script>

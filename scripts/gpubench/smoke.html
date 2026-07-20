@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>gpubench smoke</title>
+<style>
+  body { margin: 0; background: #101010; }
+  canvas { display: block; }
+</style>
+<canvas id="c"></canvas>
+<script type="module">
+  import { WebGL2Renderer } from './vtgl.js';
+  import { loadVt, PackedVt } from './vtcore.mjs';
+  import { PackedSource } from './packed-source.mjs';
+
+  const THEME = { foreground: 0xd0d0d0, background: 0x101010, cursor: 0xffffff };
+
+  window.smoke = async (stream, cols, rows, bytes) => {
+    const g = await loadVt();
+    const vt = new PackedVt(g, cols, rows);
+    const raw = new Uint8Array(await (await fetch(`/stream/${stream}`)).arrayBuffer());
+    const feed = raw.subarray(0, Math.min(bytes, raw.length));
+    for (let i = 0; i < feed.length; i += 65536) vt.write(feed.subarray(i, i + 65536));
+
+    const packed = vt.pack();
+    const geom = vt.packedGeometry();
+    const src = new PackedSource(cols, rows, THEME);
+    src.adopt(packed.cells, packed.dirty);
+
+    const canvas = document.getElementById('c');
+    const r = new WebGL2Renderer({
+      fontFamily: 'monospace',
+      fontSize: 14,
+      dpr: 1,
+      theme: THEME,
+      resolveInverse: false,
+    });
+    r.mount(canvas);
+    r.resize(cols, rows, 1);
+    const stats = r.render(src, 0);
+
+    // Read the framebuffer back so we can prove real textured quads landed,
+    // rather than trusting that render() returned without throwing.
+    const gl = canvas.getContext('webgl2');
+    const w = canvas.width;
+    const h = canvas.height;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const hist = new Map();
+    let nonBg = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const k = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
+      hist.set(k, (hist.get(k) ?? 0) + 1);
+      if (k !== 0x101010) nonBg++;
+    }
+    let graphemeCells = 0;
+    for (let i = 0; i < cols * rows; i++) if (packed.cells[i * 16 + 13] > 0) graphemeCells++;
+
+    const d = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+      renderer: gl.getParameter(d.UNMASKED_RENDERER_WEBGL),
+      geom,
+      stats,
+      canvas: { w, h },
+      distinctColors: hist.size,
+      nonBgFraction: nonBg / (w * h),
+      graphemeCells,
+      checksum: src.checksum(),
+      top: [...hist.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6),
+    };
+  };
+  window.__ready = true;
+</script>
