@@ -19,6 +19,8 @@ import { gunzipSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GhosttyRaw, GhosttyWeb, Xterm, loadGhosttyRaw, loadGhosttyWeb } from './drivers.mjs';
+import { GhosttyWebMulti } from './drivers-multi.mjs';
+import { GhosttyPacked, GhosttyPackOnly } from './drivers-packed.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STREAM_DIR = join(HERE, 'streams');
@@ -152,6 +154,9 @@ const MAKERS = {
   'ghostty-raw': (cols, rows, sb) => new GhosttyRaw(rawMod, cols, rows, { scrollback: sb }),
   'ghostty-raw-alloc': (cols, rows, sb) => new GhosttyRaw(rawMod, cols, rows, { scrollback: sb, reuseBuffer: false }),
   'ghostty-web': (cols, rows, sb) => new GhosttyWeb(webPerf, cols, rows, { scrollback: sb }),
+  'ghostty-multi': (cols, rows, sb) => new GhosttyWebMulti(webPerf, cols, rows, { scrollback: sb }),
+  'ghostty-packed': (cols, rows, sb) => new GhosttyPacked(webPerf, cols, rows, { scrollback: sb }),
+  'ghostty-pack-only': (cols, rows, sb) => new GhosttyPackOnly(webPerf, cols, rows, { scrollback: sb }),
   xterm: (cols, rows) => new Xterm(XtermTerminal, cols, rows, { scrollback: SCROLLBACK_LINES }),
 };
 
@@ -182,17 +187,18 @@ async function benchWrite(driver, stream, size) {
     // and so a silently broken driver shows up as an empty grid.
     const probe = term.readViewport ? term.readViewport() : null;
     const retained = term.totalRows;
+    if (i === WARMUP && probe) checkNonEmpty(driver, stream.name, size.label, probe, term);
     term.free?.();
     lastRetained = retained;
     if (i >= WARMUP) times.push(Number(t1 - t0) / 1e6);
-    if (i === WARMUP && probe) checkNonEmpty(driver, stream.name, size.label, probe);
   }
   return times;
 }
 
 let lastRetained = 0;
 const emptyGrids = [];
-function checkNonEmpty(driver, stream, size, pool) {
+function checkNonEmpty(driver, stream, size, pool, term) {
+  if (term?.skipNonEmptyCheck) return;
   let nonBlank = 0;
   for (const c of pool) if (c.codepoint > 32) nonBlank++;
   if (nonBlank === 0) emptyGrids.push(`${driver} ${stream} ${size}`);
@@ -261,8 +267,15 @@ async function benchTypingRead(driver, stream, size) {
 // run
 // ---------------------------------------------------------------------------
 
-const WRITE_DRIVERS = ['ghostty-raw', 'ghostty-raw-alloc', 'ghostty-web', 'xterm'];
-const READ_DRIVERS = ['ghostty-raw', 'ghostty-web', 'xterm'];
+// The packed drivers need ghostty_render_state_pack_viewport, which only the
+// patched build exports, so they are opt-in via --packed rather than default.
+const PACKED = Boolean(args.packed);
+const WRITE_DRIVERS = PACKED
+  ? ['ghostty-web', 'ghostty-multi', 'ghostty-packed', 'ghostty-pack-only', 'xterm']
+  : ['ghostty-raw', 'ghostty-raw-alloc', 'ghostty-web', 'ghostty-multi', 'xterm'];
+const READ_DRIVERS = PACKED
+  ? ['ghostty-web', 'ghostty-multi', 'ghostty-packed', 'ghostty-pack-only', 'xterm']
+  : ['ghostty-raw', 'ghostty-web', 'ghostty-multi', 'xterm'];
 
 /**
  * Every driver is timed in its own fresh node process.
@@ -289,10 +302,11 @@ async function runChild(driver, size, calBudget) {
     warmup: WARMUP,
     scrollbackLines: SCROLLBACK_LINES,
     streams: STREAMS,
+    packed: PACKED,
   });
   const out = execFileSync(
     process.execPath,
-    ['--max-old-space-size=8192', fileURLToPath(import.meta.url), '--child', payload],
+    ['--max-old-space-size=8192', fileURLToPath(import.meta.url), '--child', payload, ...(PACKED ? ['--packed'] : [])],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
   );
   const line = out.trim().split('\n').at(-1);
@@ -354,7 +368,9 @@ async function main() {
         row.drivers[d] = { ms: s, mibps: mib / (s.median / 1000), retained: s.retained };
         line += pad(`${fmtMB(mib / (s.median / 1000))} [${fmtMs(s.min)}-${fmtMs(s.max)}ms]`, 22);
       }
-      const gb = Math.min(row.drivers['ghostty-raw'].ms.median, row.drivers['ghostty-web'].ms.median);
+      const gb = Math.min(
+        ...WRITE_DRIVERS.filter((d) => d !== 'xterm').map((d) => row.drivers[d].ms.median),
+      );
       row.ghosttyVsXterm = row.drivers.xterm.ms.median / gb;
       line += `${row.ghosttyVsXterm.toFixed(2)}x`;
       console.log(line);
@@ -362,7 +378,7 @@ async function main() {
     }
 
     console.log('\nREAD  ms per full viewport, median [min-max]');
-    console.log(pad('stream', 16) + READ_DRIVERS.map((d) => pad(d, 24)).join('') + 'ghostty-web vs xterm');
+    console.log(pad('stream', 16) + READ_DRIVERS.map((d) => pad(d, 24)).join('') + 'web / best vs xterm');
     for (const stream of streams) {
       const row = { size: size.label, stream: stream.name, drivers: {} };
       let line = pad(stream.name, 16);
@@ -372,7 +388,9 @@ async function main() {
         line += pad(`${fmtMs(s.median)} [${fmtMs(s.min)}-${fmtMs(s.max)}]`, 24);
       }
       row.ghosttyWebVsXterm = row.drivers['ghostty-web'].median / row.drivers.xterm.median;
-      line += `${row.ghosttyWebVsXterm.toFixed(2)}x`;
+      const best = Math.min(...READ_DRIVERS.filter((d) => d !== 'xterm').map((d) => row.drivers[d].median));
+      row.ghosttyBestVsXterm = best / row.drivers.xterm.median;
+      line += `${row.ghosttyWebVsXterm.toFixed(2)}x / ${row.ghosttyBestVsXterm.toFixed(2)}x`;
       console.log(line);
       results.read.push(row);
     }

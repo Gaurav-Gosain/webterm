@@ -52,7 +52,54 @@ like-for-like, because ghostty-vt exposes a per-row dirty flag and
 | `ghostty-raw` | ghostty-vt over the raw C ABI, ~8 wasm crossings per cell on the read path, reusable write staging buffer |
 | `ghostty-raw-alloc` | the same, but allocating and freeing a wasm buffer per write, which is what a naive embedding does |
 | `ghostty-web` | sip's shipped bundle at the tip of `perf/viewport-read-and-coalescing`, which is the optimized read path: render-state row iterator, hoisted typed arrays, preallocated pool, per-frame memo, damage-driven row skipping |
+| `ghostty-multi` | the same bundle, but reading through the `*_get_multi` exports the bundle never calls, which batch several keys per host call |
+| `ghostty-packed` | a custom `ghostty_render_state_pack_viewport` export that writes the whole viewport into linear memory in one call, then decodes it into the pool in JS |
+| `ghostty-pack-only` | the same call with no decode, which is the floor of the boundary contract |
 | `xterm` | `@xterm/headless`, the version webterm ships |
+
+The two packed drivers need an export that no shipped wasm has. See
+"Rebuilding the wasm" below; they are opt-in behind `--packed`.
+
+```
+node scripts/vtbench/probe-multi.mjs         # the multi ABI, checked per cell
+node scripts/vtbench/verify-multi.mjs        # multi vs the per-cell path
+node scripts/vtbench/verify-multi.mjs packed # packed vs the per-cell path
+GHOSTTY_VT_WASM=/path/to/ghostty-vt.wasm node scripts/vtbench/run.mjs --packed
+```
+
+## What the `*_get_multi` exports are, and are not
+
+The wasm exports `ghostty_cell_get_multi`, `ghostty_row_get_multi` and
+`ghostty_render_state_row_cells_get_multi`, none of which the shipped bundle
+calls. They look like bulk transfers and are not. All three have an identical
+body, a loop inside wasm calling the ordinary single-key getter once per key,
+on ONE subject:
+
+```
+i32 ghostty_..._get_multi(subject, u32 n, const u32 *keys,
+                          void *const *values, u32 *out_done)
+```
+
+`values` is an array of pointers to caller-owned out slots, not a packed
+struct. The loop stops at the first non-zero return code, never writes the
+keys after it, and reports through `out_done` how many succeeded. So they
+batch KEYS, not CELLS: the most they can remove is host-call overhead, and a
+full viewport read still costs at least one call per cell. `multi-abi.mjs`
+documents the layout and `probe-multi.mjs` checks it against the single-key
+calls on every cell of a real grid.
+
+## Rebuilding the wasm
+
+`GHOSTTY_VT_WASM` points the ghostty drivers at another build, which is how the
+vendored wasm, a fresh upstream build and a patched build are compared without
+touching the drivers. Upstream ghostty pins Zig 0.15.2 in `build.zig.zon` and
+will not build with 0.16:
+
+```
+zig build -Demit-lib-vt=true -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast
+```
+
+emits `zig-out/bin/ghostty-vt.wasm` via `GhosttyLibVt.initWasm`.
 
 Both ghostty drivers run the identical `../vtconf/vendor/ghostty-vt.wasm`.
 
@@ -93,3 +140,10 @@ Read these before quoting a number.
 - **The typing-read column is not a like-for-like comparison** and is labelled
   as such in the output. ghostty's win there is its damage-tracking API, not
   its parser speed.
+- **`ghostty-multi`, `ghostty-packed` and `ghostty-pack-only` have no
+  damage-driven path**, so their typing-read column is a full read and is not
+  comparable with `ghostty-web`'s there. They exist to measure the cold read.
+- **`ghostty-raw` disagrees with the other drivers** on some stream/size pairs
+  in `sanity.mjs`, which predates any of the bulk-read work. The contract a new
+  read path has to meet is "identical to `ghostty-web`", which is what
+  `verify-multi.mjs` checks, cell by cell and field by field.

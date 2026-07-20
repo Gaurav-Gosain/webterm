@@ -17,7 +17,15 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VTCONF = join(HERE, '..', 'vtconf');
-export const WASM_PATH = join(VTCONF, 'vendor', 'ghostty-vt.wasm');
+/**
+ * Which ghostty-vt build the ghostty drivers run.
+ *
+ * Defaults to the vendored wasm, which is what every earlier number in this
+ * harness was measured on. GHOSTTY_VT_WASM points it at another build so the
+ * same drivers, unchanged, can be run against a freshly compiled upstream
+ * wasm and the two compared directly.
+ */
+export const WASM_PATH = process.env.GHOSTTY_VT_WASM || join(VTCONF, 'vendor', 'ghostty-vt.wasm');
 
 /** Style flag bits, matching the ghostty-web bundle's CellFlags. */
 export const F = {

@@ -16,6 +16,7 @@ import { gunzipSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GhosttyRaw, GhosttyWeb, Xterm, loadGhosttyRaw, loadGhosttyWeb } from './drivers.mjs';
+import { GhosttyWebMulti } from './drivers-multi.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const [streamName = 'sgr-bat', colsArg = '200', rowsArg = '55'] = process.argv.slice(2);
@@ -62,6 +63,7 @@ function checksum(pool) {
 const terms = {
   'ghostty-raw': new GhosttyRaw(rawMod, COLS, ROWS, { scrollback: SB_BYTES }),
   'ghostty-web': new GhosttyWeb(webMod, COLS, ROWS, { scrollback: SB_BYTES }),
+  'ghostty-multi': new GhosttyWebMulti(webMod, COLS, ROWS, { scrollback: SB_BYTES }),
   xterm: new Xterm(XtermTerminal, COLS, ROWS, { scrollback: 1000 }),
 };
 for (const t of Object.values(terms)) await feed(t);
