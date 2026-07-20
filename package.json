@@ -24,6 +24,10 @@
       "types": "./dist/transport/index.d.ts",
       "import": "./dist/transport/index.js"
     },
+    "./themes": {
+      "types": "./dist/themes/index.d.ts",
+      "import": "./dist/themes/index.js"
+    },
     "./css": "./dist/webterm.css",
     "./webterm.css": "./dist/webterm.css",
     "./package.json": "./package.json",
@@ -40,6 +44,8 @@
     "test:unit": "node --import ./test/register-ts.mjs --test \"test/unit/*.test.ts\"",
     "test:browser": "npm run build && playwright test",
     "check": "npm run typecheck && npm run build && npm run test:unit",
+    "themes": "node scripts/themes/generate.mjs",
+    "themes:check": "node scripts/themes/generate.mjs --check",
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "peerDependencies": {

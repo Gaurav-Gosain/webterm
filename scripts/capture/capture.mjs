@@ -67,12 +67,18 @@ function serve() {
  * started. Anything that talks back to the terminal is bridged live instead,
  * through runOnPty.
  */
-function record(command, cols, rows) {
+function record(command, cols, rows, env = {}) {
   const script = `stty rows ${rows} cols ${cols} 2>/dev/null; ${command}`;
   return execFileSync('script', ['-qfec', script, '/dev/null'], {
     cwd: ROOT,
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows) },
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLUMNS: String(cols),
+      LINES: String(rows),
+      ...env,
+    },
   });
 }
 
@@ -121,7 +127,23 @@ const settle = (page, ms = 400) =>
  * of `eza` is replayed into all nine.
  */
 async function presets(page) {
-  const listing = record('eza --long --icons=always --no-user --no-permissions --sort=size src', 52, 15);
+  // EZA_CONFIG_DIR points at a directory the capture owns and that holds no
+  // theme, which does two things. It stops whatever is in the operator's
+  // ~/.config/eza from deciding what the shot looks like, and it drops eza back
+  // to its built-in palette, which is indexed ANSI rather than 24-bit colour.
+  // That second part is the whole reason the light frames were unreadable: a
+  // theme file makes eza emit fixed truecolour, truecolour bypasses the xterm
+  // palette entirely, and no ITheme can recolour it. The same recording then
+  // came out in dark-tuned pastels in every window, including the four sitting
+  // on a near-white latte background. Indexed colour goes through the palette,
+  // so one recording renders dark under mocha and light under latte, which is
+  // also the honest way to show that the theming works.
+  const listing = record(
+    'eza --long --icons=always --no-user --no-permissions --sort=size src',
+    52,
+    15,
+    { EZA_CONFIG_DIR: join(ROOT, 'scripts/capture/eza') },
+  );
 
   const names = ['aurora', 'ocean', 'noir', 'candy', 'slate', 'dawn', 'mint', 'sunset', 'none'];
   const cells = names.map((name, i) => {
@@ -161,10 +183,7 @@ async function presets(page) {
  * parked out of the way.
  */
 async function tabs(page) {
-  const cols = 104;
-  const rows = 30;
-
-  await build(page, {
+  const sizes = await build(page, {
     grid: { columns: 1, cellWidth: 1120, cellHeight: 660 },
     cells: [
       {
@@ -184,9 +203,15 @@ async function tabs(page) {
           shadow: 'large',
           contentBackground: BG,
         },
+        // No cols/rows: the grid is fitted to the frame instead of pinned to a
+        // pair of hand-picked numbers. Pinning them is what left a band of
+        // unpainted background down the right of this shot. The frame is sized
+        // in pixels and the grid was sized in cells, the two were chosen
+        // independently, and the frame was wide enough for about thirty columns
+        // more than the grid had. btop filled the grid exactly; the grid did
+        // not fill the window, so the strip beyond the last column stayed at
+        // the theme background while btop painted its own black up to it.
         term: {
-          cols,
-          rows,
           fontFamily: FONT,
           fontSize: 13,
           theme: 'catppuccin-mocha',
@@ -195,6 +220,12 @@ async function tabs(page) {
       },
     ],
   });
+
+  // open() fits synchronously when no cols/rows are given, so the size build()
+  // reports is already the final one. btop is started at exactly that, which
+  // ties the winsize to the measured grid rather than to a timeout: there is no
+  // window in which the program is running at a size the terminal is not.
+  const { cols, rows } = sizes[0];
 
   // btop has to run in the foreground of the pty: backgrounded it finds no
   // controlling terminal and refuses to start. So it is captured while still
@@ -208,6 +239,17 @@ async function tabs(page) {
   // Long enough for btop to have drawn its second update, so the CPU graphs
   // hold real samples rather than the empty grid of the first frame.
   await page.waitForTimeout(6000);
+
+  // A late refit would leave btop drawing at a stale size, which is the exact
+  // defect this shot used to ship. Cheap to check, and better to fail than to
+  // write out a window with a dead strip down one side.
+  const settled = await page.evaluate(() => window.size(0));
+  if (settled.cols !== cols || settled.rows !== rows) {
+    throw new Error(
+      `the grid moved under btop: started at ${cols}x${rows}, ended at ${settled.cols}x${settled.rows}`,
+    );
+  }
+
   await settle(page, 200);
   await shot(page, 'chrome-tabs', 1120);
   btop.stop();
@@ -300,7 +342,17 @@ async function light(page) {
   const rows = 22;
   // bat rather than anything reading the working tree, so the shot does not
   // change with the state of the checkout.
-  const out = record('bat --style=numbers,header --color=always --paging=never --theme="Catppuccin Latte" --line-range=1:20 src/writer.ts', cols, rows);
+  // BAT_CONFIG_PATH for the same reason eza gets EZA_CONFIG_DIR: a bat config
+  // in the operator's home would otherwise fold its own --style and --theme
+  // into this, and the shot would differ from machine to machine. The theme
+  // here is a light one and it is named on the command line, so the truecolour
+  // bat emits is tuned for the background it lands on.
+  const out = record(
+    'bat --style=numbers,header --color=always --paging=never --theme="Catppuccin Latte" --line-range=1:20 src/writer.ts',
+    cols,
+    rows,
+    { BAT_CONFIG_PATH: '/dev/null' },
+  );
 
   await build(page, {
     grid: { columns: 1, cellWidth: 1040, cellHeight: 500 },
