@@ -292,9 +292,22 @@ function chrome(p, o = {}) {
       out += `<rect x="${f.x + 164}" y="${f.y + 6}" width="70" height="${bar - 11}" rx="4" fill="${p.fg}" fill-opacity=".07"/>`;
       // Inline image placement, the thing webterm draws that a plain terminal
       // in the browser does not.
-      out += `<rect x="${f.x + 16}" y="${f.y + bar + 16}" width="104" height="72" rx="4" fill="${p.accent}" fill-opacity=".22"/>`;
-      out += `<path d="M${f.x + 22} ${f.y + bar + 76} l24 -28 l18 20 l14 -12 l30 32 z" fill="${p.accent}" fill-opacity=".55"/>`;
-      out += `<circle cx="${f.x + 96}" cy="${f.y + bar + 34}" r="7" fill="${p.accent}" fill-opacity=".6"/>`;
+      const gx = f.x + 16, gy = f.y + bar + 16, gw = 104, gh = 72;
+      out += `<rect x="${gx}" y="${gy}" width="${gw}" height="${gh}" rx="4" fill="${p.accent}" fill-opacity=".22"/>`;
+      // Absolute points on a flat base, mirrored about the centre of the box.
+      // A relative path built out of the peaks alone closes back to a start the
+      // last segment has already dropped below, which stands the whole range on
+      // a slope and pushes its right foot through the bottom of the placement.
+      // At this size an off-centre apex does not read as a range drawn freehand
+      // either, it reads as a symmetrical glyph that has come out crooked.
+      const gpx = (t) => (gx + gw * t).toFixed(1), gpy = (t) => (gy + gh * t).toFixed(1);
+      const gpeaks = [
+        [0.04, 0.94], [0.28, 0.52], [0.38, 0.66],
+        [0.50, 0.32],
+        [0.62, 0.66], [0.72, 0.52], [0.96, 0.94],
+      ];
+      out += `<path d="M${gpeaks.map(([tx, ty], i) => `${i ? 'L' : ''}${gpx(tx)} ${gpy(ty)}`).join(' ')} Z" fill="${p.accent}" fill-opacity=".55"/>`;
+      out += `<circle cx="${gpx(0.78)}" cy="${gpy(0.24)}" r="7" fill="${p.accent}" fill-opacity=".6"/>`;
       // Prompt and output lines beside and below the image.
       const line = (x, yy, w, op) => `<rect x="${x}" y="${yy}" width="${w}" height="5" rx="2.5" fill="${p.fg}" fill-opacity="${op}"/>`;
       out += line(f.x + 132, f.y + bar + 18, 120, 0.3);
