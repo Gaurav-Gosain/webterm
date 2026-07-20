@@ -118,6 +118,18 @@ export interface InputOptions {
   readOnly?: boolean;
 }
 
+export interface ReportOptions {
+  /**
+   * The terminfo entry name answered to an XTGETTCAP `TN` request, which
+   * xterm.js does not answer at all. Default 'xterm-256color'.
+   *
+   * A frontend does not get to choose this on its own: the far end sets TERM,
+   * and an answer that disagrees with it sends applications to the wrong
+   * capability table. Set it to whatever the pty is started with.
+   */
+  terminalName?: string;
+}
+
 export interface WebTermOptions {
   /** Font stack. The first family is what `fonts` entries are loaded as. */
   fontFamily?: string;
@@ -170,6 +182,7 @@ export interface WebTermOptions {
   keyboard?: KeyboardOptions;
   mouse?: MouseOptions;
   input?: InputOptions;
+  reports?: ReportOptions;
 
   /** Escape hatch: merged into the xterm ITerminalOptions last, so it wins. */
   xterm?: Record<string, unknown>;

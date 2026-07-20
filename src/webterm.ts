@@ -24,6 +24,11 @@ import { KittyGraphics } from './kitty/overlay.js';
 import { withPlaceholderFont } from './kitty/placeholder-glyph.js';
 import { KittyKeyboard } from './keyboard/keyboard.js';
 import { RendererManager } from './renderer.js';
+import {
+  GEOMETRY_WINDOW_OPTIONS,
+  installTerminalReports,
+  type TerminalReports,
+} from './reports.js';
 import { resolveTheme, type ThemeName } from './themes.js';
 import { DEFAULT_OVERRIDES, installUnicodeOverrides } from './unicode.js';
 import { BatchedWriter } from './writer.js';
@@ -56,6 +61,7 @@ export class WebTerm {
   private overlay?: KittyGraphics;
   private keyboardProtocol?: KittyKeyboard;
   private imageAddon?: ImageAddon;
+  private reports?: TerminalReports;
   private container?: HTMLElement;
 
   private transport?: Transport;
@@ -112,6 +118,7 @@ export class WebTerm {
     await this.installGraphics(term, container);
     if (o.links) await this.installLinks(term);
 
+    this.installReports(term);
     this.installClipboard(term, container);
     this.installInputPolicy(term, container);
     this.wireEvents(term);
@@ -153,6 +160,10 @@ export class WebTerm {
       fastScrollSensitivity: 5,
       minimumContrastRatio: 1,
       theme: resolveTheme(o.theme ?? (o.appearance === 'light' ? 'catppuccin-latte' : undefined)),
+      // The three read-only geometry reports, and nothing else that CSI t can
+      // reach. See GEOMETRY_WINDOW_OPTIONS for why the gate exists and what
+      // stays behind it.
+      windowOptions: { ...GEOMETRY_WINDOW_OPTIONS },
     };
     // Only when both are given: xterm validates cols and rows as numeric and
     // rejects an explicit undefined, so the keys have to be absent rather than
@@ -256,6 +267,19 @@ export class WebTerm {
     } catch (error) {
       console.warn('webterm: web links addon failed to load', error);
     }
+  }
+
+  private installReports(term: Terminal): void {
+    this.reports = installTerminalReports(term, {
+      // Same route and same read-only gate a keystroke takes, so a reply reaches
+      // an attached transport and a read-only terminal stays silent.
+      respond: (data) => {
+        if (this.options.input?.readOnly) return;
+        this.emitData(this.encoder.encode(data));
+      },
+      terminalName: this.options.reports?.terminalName,
+    });
+    this.teardown.push(() => this.reports?.dispose());
   }
 
   private installClipboard(term: Terminal, container: HTMLElement): void {
@@ -570,6 +594,7 @@ export class WebTerm {
 
   reset(): void {
     this.terminal?.reset();
+    this.reports?.reset();
     this.overlay?.reset();
     this.keyboardProtocol?.reset();
     this.motion.reset();

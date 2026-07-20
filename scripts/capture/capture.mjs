@@ -297,12 +297,13 @@ async function kitty(page) {
     ],
   });
 
-  // webterm does not answer the CSI 14 t / CSI 16 t window-size report, so
-  // `kitten icat` cannot discover the geometry on its own and refuses to send
-  // anything at all. The size is handed to it with --use-window-size, which is
-  // kitten's own flag for exactly this. Everything after that point is real:
-  // the a=q capability probe, webterm's OK, stream transfer, the PNG decode
-  // and the placement. See docs/limits.md.
+  // kitten reads the pixel geometry from TIOCGWINSZ and never sends CSI 14 t,
+  // so what it needs is pixel fields in the pty's winsize. The pty here comes
+  // from util-linux `script` and stty cannot set those, so the size is handed
+  // to icat with --use-window-size, which is kitten's own flag for exactly
+  // this. Everything after that point is real: the a=q capability probe,
+  // webterm's OK, stream transfer, the PNG decode and the placement. See
+  // docs/limits.md.
   const px = await page.evaluate(() => window.pixelSize(0));
   const image = 'docs/images/banner.png';
   const size = `${cols},${rows},${px.width},${px.height}`;

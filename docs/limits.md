@@ -10,23 +10,29 @@ The peer range is `^5.5.0 || >=6.1.0-beta.0`, and the `^5.5.0` half is optimisti
 
 Two shapes of the API are handled. Older builds take the identifier as a number and hand the callback the payload including the ident byte; current builds take an `IFunctionIdentifier` (`{ final: 'G' }`) and strip the ident first. `splitApc` tolerates both.
 
-## Nothing answers the window-size report, so `kitten icat` will not send an image
+## `kitten icat` needs the pty's pixel winsize, and `CSI 14 t` is not what it reads
 
-The kitty graphics protocol sizes an image in cells, so a sender has to know how large a cell is in pixels before it can transmit anything. It asks with `CSI 14 t` (window size in pixels) and `CSI 16 t` (cell size in pixels). xterm.js implements neither, and this package registers no handler for them, so both queries go unanswered.
+The kitty graphics protocol sizes an image in cells, so a sender has to know how large a cell is in pixels before it can transmit anything. `CSI 14 t` (text area in pixels) and `CSI 16 t` (cell size in pixels) are the escape sequences for asking, and both are answered now, along with `CSI 18 t`: see [Terminal reports](../README.md#terminal-reports).
 
-`WebTerm.pixelSize` returns the real figure and the `resize` event carries it, but that is the page's copy, not the terminal's reply to the application. The consequence is not degraded output, it is no output: `kitten icat` prints
+Answering them does not unblock `kitten icat`, because icat never asks. `kitten` 0.47.4 reads the pixel geometry from `TIOCGWINSZ` on its controlling terminal and from nowhere else: `kitty/utils.py:read_screen_size` is one `fcntl.ioctl` call with no fallback, the binary contains no `CSI 14 t`, and bridging a real pty to a webterm instance and logging every byte the process writes shows it emitting no query at all before it gives up. With no pixel fields in the winsize it prints
 
 ```
 Error: Terminal does not support reporting screen sizes in pixels, use a terminal such as kitty, WezTerm, Konsole, etc. that does.
 ```
 
-and exits without sending a byte, and `kitten icat --print-window-size` reports `0x0`. Everything downstream of that point works: pass the geometry in with kitten's own `--use-window-size <cols>,<rows>,<width>,<height>` and the `a=q` probe is answered, transfer settles on stream mode, and the image is placed. `scripts/capture/capture.mjs` does exactly that to produce the graphics figure in the README, and asserts a placement landed rather than shipping a picture of an empty terminal.
+and exits without sending a byte, and `kitten icat --print-window-size` reports `0x0`.
 
-A fix belongs in this package: register a CSI handler for `14 t` and `16 t` that replies from `pixelSize` and the measured cell box. It is not written yet.
+The requirement is therefore on whatever allocates the pty: it has to set `ws_xpixel` and `ws_ypixel` on `TIOCSWINSZ`, not only `ws_row` and `ws_col`. That figure is what `WebTerm.pixelSize` returns and what the `resize` event carries as `pixel`. Measured on the tree at hand, with the pty's winsize carrying the pixel fields and no `--use-window-size` anywhere: `kitten icat --print-window-size` prints `975x378`, and `kitten icat` transmits, the `a=q` probe is answered, transfer settles on stream mode, and one placement lands in the overlay.
 
-## The kitty keyboard protocol is not available at all
+`scripts/capture/capture.mjs` still passes `--use-window-size` for the README figure. Its pty comes from util-linux `script`, whose `stty` cannot set the pixel fields, so handing the size in is how they get there rather than a statement about what the terminal answers.
 
-xterm.js does not implement it, and nothing in this package can add it, because the encoding happens inside xterm's own key handler rather than anywhere a wrapper can intercept. An application that asks for progressive enhancement (`CSI > 1 u`) gets legacy encodings, so a disambiguated Ctrl+I and Tab, or a key release event, are not obtainable here.
+The reports are worth having for the senders that do ask: `chafa`, `timg` and the sixel encoders size against `CSI 14 t` and `CSI 16 t`, and a full-screen application that wants pixel-accurate placement has no other way to learn the cell box.
+
+## The colon SGR five-argument shorthand is misparsed, upstream
+
+`CSI 38:2:R:G:B m` sets the wrong colour. `InputHandler._extractColor` normalises into a six-slot accumulator whose third slot is the T.416 colour space id, and it shifts past that slot only on the indexed branch (`accu[1] === 5`). The direct-colour branch has no equivalent shift, so in the five-argument form R is consumed by the colour-space slot and the channels are read one position late: green lands in red, blue in green, and blue comes out zero. The six-argument form `38:2::R:G:B` is correct, because the empty subparameter fills the slot, and so is the semicolon form `38;2;R;G;B`, which takes a different branch entirely. ghostty-vt reads both colon forms.
+
+It cannot be corrected from outside xterm. A registered `CSI m` handler is called before the built-in one, but there is no published way to set the current character attributes, so handling the sequence would mean reimplementing the whole of SGR to fix one branch of it, and rewriting the parser's borrowed parameter object in place would be a private reach in the hottest path in the parser. `scripts/vtconf` reports it as the one remaining divergence across the 44 SGR cases.
 
 ## Cell widths are floored by both atlas renderers, upstream
 

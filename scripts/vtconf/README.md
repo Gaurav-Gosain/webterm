@@ -20,6 +20,18 @@ node scripts/vtconf/run.mjs --case decstr    # one case
 node scripts/vtconf/run.mjs --json out.json  # machine-readable results
 ```
 
+By default the xterm side is bare `@xterm/headless`, which is what this package
+takes as a peer dependency. `--webterm` measures what the package actually ships
+instead: the same XTWINOPS gate `src/reports.ts` opens and the same report
+handlers it registers. That side is TypeScript source, so it needs the loader
+the unit suite uses:
+
+```
+node --import ./test/register-ts.mjs scripts/vtconf/run.mjs --webterm
+```
+
+The summary names which of the two it measured.
+
 Nothing needs a browser. `@xterm/headless` must be installed at the same
 version as the `@xterm/xterm` this package vendors:
 
@@ -80,6 +92,14 @@ Read these before quoting any number out of it.
   colour queries and window-size reports through host callbacks the embedder
   registers, not through the pty write callback. This harness wires only
   `WRITE_PTY`, so ghostty's silence on those is the harness's doing.
+- **Four of those five cannot be answered on the xterm side either, here.**
+  `xtwinops-14-pixels` and the three OSC colour queries are implemented in
+  xterm.js, in `CoreBrowserTerminal`, and answered out of its render service and
+  its theme service. A headless terminal has neither, so they read as unanswered
+  whatever this package does. A `FAIL` on those four is a statement about
+  `@xterm/headless`, not about what ships. They are checked where they are real,
+  in a browser against the built bundle, by `test/browser/reports.spec.mjs`.
+  `xtwinops-18-chars` is answered from the buffer service and does run here.
 - **`ghostty_terminal_get(CURSOR_STYLE)` is not usable.** It returns a constant
   regardless of DECSCUSR in this build, so DECSCUSR state is not compared.
 - **A case with no `expect` is differential only.** The harness reports that

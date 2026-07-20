@@ -9,7 +9,16 @@ import pkg from '@xterm/headless';
 const { Terminal } = pkg;
 
 export class XtermTerm {
-  constructor(cols, rows, { scrollback = 1000, unicode = true } = {}) {
+  /**
+   * `layer` is the webterm module under test, or null to measure bare xterm.js.
+   *
+   * Passing it makes the driver report what the package ships rather than what
+   * its dependency ships: the same `windowOptions` webterm opens and the same
+   * report handlers it registers. It is passed in rather than imported here
+   * because it is TypeScript source, which only runs under the loader in
+   * test/register-ts.mjs; see the README.
+   */
+  constructor(cols, rows, { scrollback = 1000, unicode = true, layer = null } = {}) {
     this.cols = cols;
     this.rows = rows;
     this.responses = [];
@@ -18,7 +27,13 @@ export class XtermTerm {
       rows,
       scrollback,
       allowProposedApi: true,
+      ...(layer ? { windowOptions: { ...layer.GEOMETRY_WINDOW_OPTIONS } } : {}),
     });
+    if (layer) {
+      layer.installTerminalReports(this.term, {
+        respond: (data) => this.responses.push(data),
+      });
+    }
     // Everything the emulator would send back up the pty.
     this.term.onData((d) => this.responses.push(d));
     this.term.onBinary((d) => this.responses.push(d));
