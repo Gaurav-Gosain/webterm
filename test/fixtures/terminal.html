@@ -52,6 +52,11 @@
         },
         clipboard: { copyOnSelect: params.get('copyOnSelect') === '1' },
       };
+      // The mode 2026 watchdog. 0 disables it, which is the arm that has to
+      // still show the pathology for the fixed arm to mean anything.
+      if (params.has('syncTimeout')) {
+        options.syncOutput = { timeoutMs: Number(params.get('syncTimeout')) };
+      }
       if (params.get('cols') && params.get('rows')) {
         options.cols = Number(params.get('cols'));
         options.rows = Number(params.get('rows'));
@@ -81,6 +86,27 @@
       };
 
       await term.open(document.getElementById('host'));
+
+      // Repaint accounting for the synchronized-output suite. `renderCount` is
+      // xterm's own onRender; `frameHashes` samples what is actually on the
+      // canvases, because an event firing and pixels changing are different
+      // claims and this bug is the case where they disagree.
+      window.renderCount = 0;
+      term.xterm.onRender(() => window.renderCount++);
+      window.canvasHash = () => {
+        const canvases = document.querySelectorAll('#host canvas');
+        if (!canvases.length) return null;
+        let out = '';
+        for (const c of canvases) out += c.toDataURL();
+        // FNV-1a over the data URLs. Only equality matters here.
+        let h = 0x811c9dc5;
+        for (let i = 0; i < out.length; i++) {
+          h ^= out.charCodeAt(i);
+          h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(16);
+      };
+
       window.ready = true;
     </script>
   </body>

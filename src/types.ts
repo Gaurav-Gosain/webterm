@@ -20,6 +20,17 @@ export interface RendererOptions {
   fallbackOnContextLoss?: boolean;
 }
 
+export interface SyncOutputOptions {
+  /**
+   * How long a repaint may be withheld by DEC mode 2026, synchronized output,
+   * before one is forced, in milliseconds. Default 150, the timeout the mode's
+   * own documentation suggests terminals apply, and two orders of magnitude
+   * longer than any legitimate synchronized update. Set 0 to disable the
+   * watchdog and take xterm's behaviour unchanged.
+   */
+  timeoutMs?: number;
+}
+
 export interface ClipboardOptions {
   /** Handle OSC 52 writes. Default true. */
   osc52?: boolean;
@@ -183,6 +194,13 @@ export interface WebTermOptions {
   mouse?: MouseOptions;
   input?: InputOptions;
   reports?: ReportOptions;
+  /**
+   * The DEC mode 2026 repaint watchdog. See src/sync-output.ts: xterm.js stops
+   * repainting entirely under output whose synchronized updates arrive more
+   * often than once per frame, and this puts a ceiling on how long a repaint
+   * can be withheld.
+   */
+  syncOutput?: SyncOutputOptions;
 
   /** Escape hatch: merged into the xterm ITerminalOptions last, so it wins. */
   xterm?: Record<string, unknown>;

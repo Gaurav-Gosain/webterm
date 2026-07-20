@@ -31,6 +31,7 @@ import {
 } from './reports.js';
 import { resolveTheme, type ThemeName } from './themes.js';
 import { DEFAULT_OVERRIDES, installUnicodeOverrides } from './unicode.js';
+import { SyncOutputWatchdog } from './sync-output.js';
 import { BatchedWriter } from './writer.js';
 import type {
   KittyOptions,
@@ -56,6 +57,7 @@ export class WebTerm {
   private terminal?: Terminal;
   private fitAddon?: FitAddon;
   private writer?: BatchedWriter;
+  private syncOutput?: SyncOutputWatchdog;
   private rendererManager?: RendererManager;
   private clipboard?: Clipboard;
   private overlay?: KittyGraphics;
@@ -112,7 +114,8 @@ export class WebTerm {
     term.loadAddon(this.fitAddon);
 
     term.open(container);
-    this.writer = new BatchedWriter(term);
+    this.syncOutput = new SyncOutputWatchdog(term, this.options.syncOutput);
+    this.writer = new BatchedWriter(term, () => this.syncOutput?.noteWrite());
 
     await this.installRenderer(term);
     await this.installGraphics(term, container);
@@ -417,10 +420,12 @@ export class WebTerm {
     this.rendererManager?.dispose();
     this.clipboard?.dispose();
     this.writer?.dispose();
+    this.syncOutput?.dispose();
     this.terminal?.dispose();
     this.emitter.clear();
 
     if (this.container) this.container.textContent = '';
+    this.syncOutput = undefined;
     this.terminal = undefined;
     this.container = undefined;
   }
@@ -535,6 +540,17 @@ export class WebTerm {
 
   get renderer(): RendererKind {
     return this.rendererManager?.current ?? 'dom';
+  }
+
+  /**
+   * Repaints the mode 2026 watchdog has had to force since open.
+   *
+   * Zero for every application that ends its synchronized updates promptly.
+   * A number that climbs means output is holding the mode across frames and
+   * xterm would otherwise have stopped painting; see src/sync-output.ts.
+   */
+  get forcedRepaints(): number {
+    return this.syncOutput?.forced ?? 0;
   }
 
   get element(): HTMLElement | undefined {

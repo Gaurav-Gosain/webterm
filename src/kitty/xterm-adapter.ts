@@ -8,7 +8,11 @@
  * name a non-public method; the overlay talks to the object this module
  * returns.
  *
- * Three dependencies, each with a defined degradation:
+ * It is named for the kitty overlay because that was the first thing to need
+ * it, and it stays here so the rule remains one file rather than a convention.
+ * `forceRepaint` below serves the synchronized-output watchdog, not graphics.
+ *
+ * Four dependencies, each with a defined degradation:
  *
  *   1. `term.parser.registerApcHandler`. Not present in @xterm/xterm 6.0.0, and
  *      only shipped in the 6.1.0 beta, so it is absent from the published types
@@ -31,6 +35,21 @@
  *      `.xterm-screen` element against the grid, which is public and real; only
  *      when no element has been rendered yet does it fall back to a ratio of
  *      the font size, which misplaces images on a font whose metrics differ.
+ *
+ *   4. `term._core.coreService.decPrivateModes.synchronizedOutput` and
+ *      `term._core._renderService.refreshRows`, for `forceRepaint`. There is no
+ *      published way to make xterm draw while DEC mode 2026 is set: the mode is
+ *      readable through `term.modes` but not writable, and `term.refresh()`
+ *      goes through the same `refreshRows` gate that is declining to draw.
+ *      Clearing the flag and rendering synchronously in one tick is what the
+ *      watchdog needs; anything asynchronous loses the race to the next
+ *      begin-of-update, which is the reason xterm's own safety timeout does not
+ *      work. That render also cancels the 1000 ms timeout, so a caller that
+ *      leaves the mode set owes the stuck-mode recovery itself. If either name
+ *      disappears `forceRepaint` returns false, the
+ *      watchdog stops forcing, and the terminal is back to xterm's behaviour:
+ *      correct at every rate except a sustained one, which is where it stops
+ *      repainting.
  *
  * Every reach is wrapped so a renamed or removed internal degrades rather than
  * throwing into the parser callback that triggered it.
@@ -82,6 +101,54 @@ export interface XtermAdapter {
    * rendered screen element, then estimates from the font size.
    */
   cellPixels(): { width: number; height: number };
+}
+
+/** The two internals `forceRepaint` drives. Both are optional at runtime. */
+interface RepaintInternals {
+  coreService?: { decPrivateModes?: { synchronizedOutput?: boolean } };
+  _renderService?: { refreshRows(start: number, end: number, sync?: boolean): void };
+}
+
+/**
+ * Draw the whole grid now, clearing DEC mode 2026 for the duration.
+ *
+ * Returns false if this xterm build does not expose what it needs, so a caller
+ * can stop asking rather than spin. See dependency 4 in the module header for
+ * why the mode has to be cleared and why the render has to be synchronous.
+ *
+ * `restoreMode` decides what the terminal is left in. True while the
+ * application is still producing: it is mid-update and its end-of-update has to
+ * find the mode where it left it. False when the application has stopped
+ * mid-update and is never going to send one, which is the case xterm's own
+ * 1000 ms timeout exists for; leaving the mode set there would freeze the
+ * terminal until the next byte arrives.
+ *
+ * Restoring the mode is not free of consequence: the synchronous render calls
+ * xterm's `SynchronizedOutputHandler.flush()`, which cancels that 1000 ms
+ * timeout. A caller that restores the mode has taken over responsibility for
+ * the stuck-mode recovery and must eventually call again with false.
+ */
+export function forceRepaint(term: Terminal, restoreMode: boolean): boolean {
+  try {
+    const core = (term as unknown as { _core?: RepaintInternals })._core;
+    const modes = core?.coreService?.decPrivateModes;
+    const renderService = core?._renderService;
+    if (!modes || typeof modes.synchronizedOutput !== 'boolean') return false;
+    if (!renderService || typeof renderService.refreshRows !== 'function') return false;
+    if (!modes.synchronizedOutput) return false;
+
+    modes.synchronizedOutput = false;
+    try {
+      renderService.refreshRows(0, Math.max(0, term.rows - 1), true);
+    } finally {
+      if (restoreMode) modes.synchronizedOutput = true;
+    }
+    return true;
+  } catch {
+    // A renamed internal, or a render that threw. Either way the caller should
+    // treat the forced repaint as unavailable rather than retry it every tick.
+    return false;
+  }
 }
 
 /**
