@@ -92,7 +92,7 @@ const CB_WRITE_PTY = 1;
 let cachedBytes = null;
 let cachedTrampoline = null;
 
-export async function loadGhostty(wasmPath = join(HERE, 'vendor', 'ghostty-vt.wasm')) {
+export async function loadGhostty(wasmPath = process.env.GHOSTTY_VT_WASM || join(HERE, 'vendor', 'ghostty-vt.wasm')) {
   if (!cachedBytes) cachedBytes = readFileSync(wasmPath);
   if (!cachedTrampoline) cachedTrampoline = readFileSync(join(HERE, 'vendor', 'trampoline.wasm'));
   const logs = [];
