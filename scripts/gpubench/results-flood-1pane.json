@@ -1,0 +1,2204 @@
+{
+  "meta": {
+    "gpu": {
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3070/PCIe/SSE2, OpenGL ES 3.2)",
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "fps": 61,
+      "isolated": true,
+      "sab": true,
+      "timerRes": 0.004999995231628418
+    },
+    "chromium": "149.0.7827.55",
+    "node": "v24.18.0",
+    "stream": "btop-200x55",
+    "driver": "NVIDIA GeForce RTX 3070, 610.43.03",
+    "governor": "16 powersave",
+    "loadavg": "0.80 1.20 1.57 1/4084 3183545"
+  },
+  "verify": {
+    "c1": {
+      "checksum": null,
+      "pixels": {
+        "hash": 301482437,
+        "w": 1600,
+        "h": 1045,
+        "distinctColors": 1,
+        "nonBgFraction": 1
+      },
+      "proof": [
+        {
+          "hasAtlas": true,
+          "ctor": "Le"
+        }
+      ]
+    },
+    "c2": {
+      "checksum": 62160127,
+      "pixels": {
+        "hash": 3446205246,
+        "w": 1600,
+        "h": 1265,
+        "distinctColors": 5873,
+        "nonBgFraction": 0.9999965415019763
+      },
+      "proof": null
+    },
+    "c3": {
+      "checksum": 62160127,
+      "pixels": {
+        "hash": 3446205246,
+        "w": 1600,
+        "h": 1265,
+        "distinctColors": 5873,
+        "nonBgFraction": 0.9999965415019763
+      },
+      "proof": null
+    },
+    "c4": {
+      "checksum": 62160127,
+      "pixels": {
+        "hash": 3446205246,
+        "w": 1600,
+        "h": 1265,
+        "distinctColors": 5873,
+        "nonBgFraction": 0.9999965415019763
+      },
+      "proof": null
+    },
+    "c5": {
+      "checksum": 62160127,
+      "pixels": {
+        "hash": 3446205246,
+        "w": 1600,
+        "h": 1265,
+        "distinctColors": 5873,
+        "nonBgFraction": 0.9999965415019763
+      },
+      "proof": null
+    },
+    "candidateCellsAgree": true,
+    "candidatePixelsAgree": true,
+    "frameHasContent": true,
+    "negativeControl": {
+      "differentStreamChecksum": 4076203634,
+      "differsFromC2": true,
+      "differentPixelHash": true
+    }
+  },
+  "scenarios": [
+    {
+      "contender": "c1",
+      "rep": 0,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5000.3099999427795,
+      "bytes": 36962304,
+      "mibPerSec": 7.04956292717919,
+      "rafFrames": 301,
+      "rafFps": 60.1962678320833,
+      "rafInterval": {
+        "n": 300,
+        "min": 16.659999999999854,
+        "p50": 16.665000000000873,
+        "p95": 16.670000000000073,
+        "p99": 16.670000000000073,
+        "max": 16.670000000000073,
+        "mean": 16.66599666666667
+      },
+      "longFrames": {
+        "over16_7": 0,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 301,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.004999995231628418,
+        "p99": 0.004999995231628418,
+        "max": 0.005000114440917969,
+        "mean": 0.000730897501061525
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 4.765000104904175,
+        "p50": 5.875,
+        "p95": 20.070000052452087,
+        "p99": 20.295000076293945,
+        "max": 20.295000076293945,
+        "mean": 11.188947376451994
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.7850000858306885,
+        "p50": 4.809999942779541,
+        "p95": 5.884999990463257,
+        "p99": 5.930000066757202,
+        "max": 5.930000066757202,
+        "mean": 4.1852631694392155
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": null,
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5104.876,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 557.038,
+          "tasks": 1507,
+          "taskP50Ms": 0.323,
+          "taskP95Ms": 0.808,
+          "taskMaxMs": 1.463,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 109.11881111313967,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 14.947,
+            "tasks": 611,
+            "taskP50Ms": 0.025,
+            "taskP95Ms": 0.043,
+            "taskMaxMs": 0.102,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 0.1,
+            "tasks": 1,
+            "taskP50Ms": 0.1,
+            "taskP95Ms": 0.1,
+            "taskMaxMs": 0.1,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 0.8000000000000114,
+        "perType": {
+          "browser": 0.03999999999999915,
+          "zygote": 0,
+          "gpu-process": 0.03999999999999915,
+          "utility": 0.0799999999999983,
+          "renderer": 0.6399999999999997
+        },
+        "cpuPerSecond": 0.15999008061683495
+      }
+    },
+    {
+      "contender": "c1",
+      "rep": 1,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5002.014999985695,
+      "bytes": 36962304,
+      "mibPerSec": 7.047159994542361,
+      "rafFrames": 301,
+      "rafFps": 60.17574917325534,
+      "rafInterval": {
+        "n": 300,
+        "min": 16.659999999999854,
+        "p50": 16.665000000000873,
+        "p95": 16.67000000000189,
+        "p99": 16.67000000000189,
+        "max": 16.67000000000189,
+        "mean": 16.66599666666667
+      },
+      "longFrames": {
+        "over16_7": 0,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 301,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.004999995231628418,
+        "p99": 0.004999995231628418,
+        "max": 0.005000114440917969,
+        "mean": 0.0005813955864637002
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 13.68500006198883,
+        "p50": 14.925000071525574,
+        "p95": 16.919999957084656,
+        "p99": 17.0349999666214,
+        "max": 17.0349999666214,
+        "mean": 15.109999989208422
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 0.04499995708465576,
+        "p50": 13.949999928474426,
+        "p95": 15.980000019073486,
+        "p99": 16.320000052452087,
+        "max": 16.320000052452087,
+        "mean": 11.604473678689255
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": null,
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5105.33,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 561.766,
+          "tasks": 1494,
+          "taskP50Ms": 0.318,
+          "taskP95Ms": 0.924,
+          "taskMaxMs": 1.251,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 110.03519850822572,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 14.193,
+            "tasks": 611,
+            "taskP50Ms": 0.023,
+            "taskP95Ms": 0.036,
+            "taskMaxMs": 0.097,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 0.093,
+            "tasks": 1,
+            "taskP50Ms": 0.093,
+            "taskP95Ms": 0.093,
+            "taskMaxMs": 0.093,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 0.7600000000000051,
+        "perType": {
+          "browser": 0.03999999999999915,
+          "zygote": 0,
+          "gpu-process": 0.029999999999997584,
+          "utility": 0.0799999999999983,
+          "renderer": 0.6100000000000003
+        },
+        "cpuPerSecond": 0.15193876867665904
+      }
+    },
+    {
+      "contender": "c1",
+      "rep": 2,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5001.610000014305,
+      "bytes": 37158912,
+      "mibPerSec": 7.085218559603536,
+      "rafFrames": 301,
+      "rafFps": 60.18062183959547,
+      "rafInterval": {
+        "n": 300,
+        "min": 16.659999999999854,
+        "p50": 16.665000000000873,
+        "p95": 16.67000000000189,
+        "p99": 16.67000000000189,
+        "max": 16.67000000000189,
+        "mean": 16.66598333333334
+      },
+      "longFrames": {
+        "over16_7": 0,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 301,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.004999995231628418,
+        "p99": 0.004999995231628418,
+        "max": 0.004999995231628418,
+        "mean": 0.00026578047742875313
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 0.46000003814697266,
+        "p50": 16.9650000333786,
+        "p95": 19.21999990940094,
+        "p99": 19.230000019073486,
+        "max": 19.230000019073486,
+        "mean": 14.89973685615941
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 0.04500007629394531,
+        "p50": 2.0049999952316284,
+        "p95": 15.52999997138977,
+        "p99": 16.200000047683716,
+        "max": 16.200000047683716,
+        "mean": 4.416315800265262
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": null,
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5104.941,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 525.937,
+          "tasks": 1502,
+          "taskP50Ms": 0.301,
+          "taskP95Ms": 0.769,
+          "taskMaxMs": 1.023,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 103.02508883060548,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 13.339,
+            "tasks": 611,
+            "taskP50Ms": 0.021,
+            "taskP95Ms": 0.033,
+            "taskMaxMs": 0.117,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 0.122,
+            "tasks": 1,
+            "taskP50Ms": 0.122,
+            "taskP95Ms": 0.122,
+            "taskMaxMs": 0.122,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 0.8200000000000074,
+        "perType": {
+          "browser": 0.07000000000000028,
+          "zygote": 0,
+          "gpu-process": 0.03999999999999915,
+          "utility": 0.129999999999999,
+          "renderer": 0.5800000000000001
+        },
+        "cpuPerSecond": 0.16394720899823498
+      }
+    },
+    {
+      "contender": "c2",
+      "rep": 0,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5001.939999938011,
+      "bytes": 65929216,
+      "mibPerSec": 12.570122792512347,
+      "rafFrames": 284,
+      "rafFps": 56.77797014828639,
+      "rafInterval": {
+        "n": 283,
+        "min": 14.729999999999563,
+        "p50": 17.705000000001746,
+        "p95": 18.739999999997963,
+        "p99": 19.210000000002765,
+        "max": 19.43000000000029,
+        "mean": 17.69924028268552
+      },
+      "longFrames": {
+        "over16_7": 218,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 284,
+        "min": 0.940000057220459,
+        "p50": 1.0149999856948853,
+        "p95": 1.15500009059906,
+        "p99": 1.3899999856948853,
+        "max": 1.6799999475479126,
+        "mean": 1.0346478832439638
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 2.2450000047683716,
+        "p50": 12.074999928474426,
+        "p95": 17.16000008583069,
+        "p99": 17.24500000476837,
+        "max": 17.24500000476837,
+        "mean": 11.132368426573905
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 2.2549999952316284,
+        "p50": 12.089999914169312,
+        "p95": 17.175000071525574,
+        "p99": 17.25,
+        "max": 17.25,
+        "mean": 11.142631580955104
+      },
+      "eventTimingMs": null,
+      "packMs": {
+        "n": 352,
+        "min": 0.2099999189376831,
+        "p50": 0.2250000238418579,
+        "p95": 0.2749999761581421,
+        "p99": 0.3950001001358032,
+        "max": 0.6649999618530273,
+        "mean": 0.23393465917218814
+      },
+      "renderMs": {
+        "n": 352,
+        "min": 0.6899999380111694,
+        "p50": 0.7899999618530273,
+        "p95": 0.9300000667572021,
+        "p99": 1.1749999523162842,
+        "max": 5.580000042915344,
+        "mean": 0.8239772699095986
+      },
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5105.301,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 1205.515,
+          "tasks": 2507,
+          "taskP50Ms": 0.775,
+          "taskP95Ms": 1.221,
+          "taskMaxMs": 1.829,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 236.13005384011637,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 163.943,
+            "tasks": 1385,
+            "taskP50Ms": 0.047,
+            "taskP95Ms": 0.325,
+            "taskMaxMs": 1.59,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 62.558,
+            "tasks": 1651,
+            "taskP50Ms": 0.025,
+            "taskP95Ms": 0.126,
+            "taskMaxMs": 0.269,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 2,
+        "perType": {
+          "browser": 0.14000000000000057,
+          "zygote": 0,
+          "gpu-process": 0.28000000000000114,
+          "utility": 0.22000000000000064,
+          "renderer": 1.3600000000000003
+        },
+        "cpuPerSecond": 0.3998448601991999
+      }
+    },
+    {
+      "contender": "c2",
+      "rep": 1,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5000.020000100136,
+      "bytes": 65273856,
+      "mibPerSec": 12.449950199949862,
+      "rafFrames": 283,
+      "rafFps": 56.599773599772064,
+      "rafInterval": {
+        "n": 282,
+        "min": 16.659999999996217,
+        "p50": 17.705000000001746,
+        "p95": 19.00499999999738,
+        "p99": 19.279999999998836,
+        "max": 19.610000000000582,
+        "mean": 17.73937943262413
+      },
+      "longFrames": {
+        "over16_7": 200,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 283,
+        "min": 0.9450000524520874,
+        "p50": 1.034999966621399,
+        "p95": 1.3149999380111694,
+        "p99": 1.4549999237060547,
+        "max": 1.6549999713897705,
+        "mean": 1.0855123638685515
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 2.8299999237060547,
+        "p50": 9.835000038146973,
+        "p95": 16.225000023841858,
+        "p99": 16.62999999523163,
+        "max": 16.62999999523163,
+        "mean": 9.816315795245924
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 2.834999918937683,
+        "p50": 9.84500002861023,
+        "p95": 16.235000014305115,
+        "p99": 16.634999990463257,
+        "max": 16.634999990463257,
+        "mean": 9.8252631551341
+      },
+      "eventTimingMs": null,
+      "packMs": {
+        "n": 352,
+        "min": 0.21000003814697266,
+        "p50": 0.2349998950958252,
+        "p95": 0.28999996185302734,
+        "p99": 0.3299999237060547,
+        "max": 0.4700000286102295,
+        "mean": 0.2429403361271728
+      },
+      "renderMs": {
+        "n": 352,
+        "min": 0.7150000333786011,
+        "p50": 0.7999999523162842,
+        "p95": 1.0299999713897705,
+        "p99": 1.15500009059906,
+        "max": 5.539999961853027,
+        "mean": 0.846122162247246
+      },
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5103.507,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 1267.526,
+          "tasks": 2513,
+          "taskP50Ms": 0.774,
+          "taskP95Ms": 1.263,
+          "taskMaxMs": 1.939,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 248.36372322013082,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 166.634,
+            "tasks": 1381,
+            "taskP50Ms": 0.049,
+            "taskP95Ms": 0.333,
+            "taskMaxMs": 0.79,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 64.715,
+            "tasks": 1628,
+            "taskP50Ms": 0.026,
+            "taskP95Ms": 0.136,
+            "taskMaxMs": 0.381,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 2.1000000000000085,
+        "perType": {
+          "browser": 0.14000000000000057,
+          "zygote": 0,
+          "gpu-process": 0.2900000000000027,
+          "utility": 0.23000000000000043,
+          "renderer": 1.4399999999999995
+        },
+        "cpuPerSecond": 0.41999831999831033
+      }
+    },
+    {
+      "contender": "c2",
+      "rep": 2,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5003.700000047684,
+      "bytes": 65667072,
+      "mibPerSec": 12.515738353499051,
+      "rafFrames": 284,
+      "rafFps": 56.757999080139406,
+      "rafInterval": {
+        "n": 283,
+        "min": 11.239999999997963,
+        "p50": 17.719999999993888,
+        "p95": 18.794999999998254,
+        "p99": 19.06500000000233,
+        "max": 19.18000000000029,
+        "mean": 17.65409893992933
+      },
+      "longFrames": {
+        "over16_7": 189,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 284,
+        "min": 0.9199999570846558,
+        "p50": 0.9950000047683716,
+        "p95": 1.130000114440918,
+        "p99": 1.2200000286102295,
+        "max": 1.590000033378601,
+        "mean": 1.0075176030817166
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 1.4700000286102295,
+        "p50": 8.524999976158142,
+        "p95": 14.884999990463257,
+        "p99": 17.740000009536743,
+        "max": 17.740000009536743,
+        "mean": 8.838947365158482
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.475000023841858,
+        "p50": 8.52999997138977,
+        "p95": 14.889999985694885,
+        "p99": 17.75499999523163,
+        "max": 17.75499999523163,
+        "mean": 8.849736834827223
+      },
+      "eventTimingMs": null,
+      "packMs": {
+        "n": 365,
+        "min": 0.2049999237060547,
+        "p50": 0.2250000238418579,
+        "p95": 0.25999999046325684,
+        "p99": 0.3450000286102295,
+        "max": 0.5649999380111694,
+        "mean": 0.2297397293456613
+      },
+      "renderMs": {
+        "n": 365,
+        "min": 0.6850000619888306,
+        "p50": 0.7649999856948853,
+        "p95": 0.8650000095367432,
+        "p99": 0.9950000047683716,
+        "max": 3.9299999475479126,
+        "mean": 0.786506842913693
+      },
+      "adoptMs": null,
+      "framesReceived": null,
+      "torn": 0,
+      "worker": null,
+      "trace": {
+        "error": null,
+        "spanMs": 5107.129,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 1199.175,
+          "tasks": 2489,
+          "taskP50Ms": 0.786,
+          "taskP95Ms": 1.201,
+          "taskMaxMs": 1.904,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [],
+        "mainBusyMsPerSec": 234.80413359443241,
+        "workerBusyMsPerSec": 0,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 159.59,
+            "tasks": 1381,
+            "taskP50Ms": 0.049,
+            "taskP95Ms": 0.313,
+            "taskMaxMs": 0.656,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 61.9,
+            "tasks": 1622,
+            "taskP50Ms": 0.026,
+            "taskP95Ms": 0.125,
+            "taskMaxMs": 0.355,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 1.9799999999999898,
+        "perType": {
+          "browser": 0.129999999999999,
+          "zygote": 0,
+          "gpu-process": 0.28000000000000114,
+          "utility": 0.22000000000000064,
+          "renderer": 1.3499999999999996
+        },
+        "cpuPerSecond": 0.39570717668547695
+      }
+    },
+    {
+      "contender": "c3",
+      "rep": 0,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5003.284999966621,
+      "bytes": 195362816,
+      "mibPerSec": 37.23803461150883,
+      "rafFrames": 298,
+      "rafFps": 59.56086850978668,
+      "rafInterval": {
+        "n": 297,
+        "min": 8.404999999998836,
+        "p50": 17.30999999999767,
+        "p95": 18.625,
+        "p99": 18.834999999999127,
+        "max": 18.895000000004075,
+        "mean": 16.82797979797981
+      },
+      "longFrames": {
+        "over16_7": 153,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 298,
+        "min": 0.04500007629394531,
+        "p50": 0.7950000762939453,
+        "p95": 0.8999999761581421,
+        "p99": 1.0800000429153442,
+        "max": 1.350000023841858,
+        "mean": 0.7922483242598156
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 1.274999976158142,
+        "p50": 10.989999890327454,
+        "p95": 18.2150000333786,
+        "p99": 19.364999890327454,
+        "max": 19.364999890327454,
+        "mean": 10.488421019754911
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.284999966621399,
+        "p50": 10.819999933242798,
+        "p95": 16.25499999523163,
+        "p99": 18.230000019073486,
+        "max": 18.230000019073486,
+        "mean": 9.550526292700516
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 366,
+        "min": 0.040000081062316895,
+        "p50": 0.7900000810623169,
+        "p95": 0.8899999856948853,
+        "p99": 1.0999999046325684,
+        "max": 3.915000081062317,
+        "mean": 0.7932786882900801
+      },
+      "adoptMs": {
+        "n": 366,
+        "min": 0,
+        "p50": 0.004999995231628418,
+        "p95": 0.009999990463256836,
+        "p99": 0.009999990463256836,
+        "max": 0.015000104904174805,
+        "mean": 0.004658471039735554
+      },
+      "framesReceived": 762,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 195362816,
+        "frames": 595,
+        "packMs": {
+          "n": 615,
+          "min": 0.13999998569488525,
+          "p50": 0.21999990940093994,
+          "p95": 0.24500000476837158,
+          "p99": 0.30000007152557373,
+          "max": 0.3700000047683716,
+          "mean": 0.2191626019594146
+        },
+        "renderMs": null,
+        "posts": 615,
+        "rafInterval": {
+          "n": 594,
+          "min": 7.940000057220459,
+          "p50": 8.335000038146973,
+          "p95": 8.754999995231628,
+          "p99": 8.850000023841858,
+          "max": 9.074999928474426,
+          "mean": 8.414057239137515
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5107.381,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 337.685,
+          "tasks": 2368,
+          "taskP50Ms": 0.012,
+          "taskP95Ms": 0.983,
+          "taskMaxMs": 1.5,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3184850",
+            "busyMs": 2626.953,
+            "tasks": 1243,
+            "taskP50Ms": 0.033,
+            "taskP95Ms": 4.656,
+            "taskMaxMs": 8.801,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 66.11705686339045,
+        "workerBusyMsPerSec": 514.3444360230811,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 173.194,
+            "tasks": 1454,
+            "taskP50Ms": 0.05,
+            "taskP95Ms": 0.328,
+            "taskMaxMs": 1.665,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 65.844,
+            "tasks": 1660,
+            "taskP50Ms": 0.027,
+            "taskP95Ms": 0.129,
+            "taskMaxMs": 0.328,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.8599999999999994,
+        "perType": {
+          "browser": 0.16999999999999815,
+          "zygote": 0,
+          "gpu-process": 0.28999999999999915,
+          "utility": 0.26000000000000156,
+          "renderer": 3.1400000000000006
+        },
+        "cpuPerSecond": 0.7714931290193844
+      }
+    },
+    {
+      "contender": "c3",
+      "rep": 1,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5000.439999938011,
+      "bytes": 184942592,
+      "mibPerSec": 35.271896073582816,
+      "rafFrames": 284,
+      "rafFps": 56.79500204052456,
+      "rafInterval": {
+        "n": 283,
+        "min": 16.654999999998836,
+        "p50": 17.55999999999767,
+        "p95": 18.639999999999418,
+        "p99": 18.81500000000233,
+        "max": 19.095000000001164,
+        "mean": 17.570583038869252
+      },
+      "longFrames": {
+        "over16_7": 178,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 284,
+        "min": 0.04499995708465576,
+        "p50": 0.8100000619888306,
+        "p95": 1.024999976158142,
+        "p99": 1.3700000047683716,
+        "max": 1.4300000667572021,
+        "mean": 0.8223063404291449
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 1.875,
+        "p50": 8.84500002861023,
+        "p95": 17.769999980926514,
+        "p99": 17.949999928474426,
+        "max": 17.949999928474426,
+        "mean": 10.34473685214394
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.8799999952316284,
+        "p50": 8.84500002861023,
+        "p95": 17.774999976158142,
+        "p99": 17.954999923706055,
+        "max": 17.954999923706055,
+        "mean": 10.349210538362202
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 352,
+        "min": 0.039999961853027344,
+        "p50": 0.7999999523162842,
+        "p95": 1.0099999904632568,
+        "p99": 1.3600000143051147,
+        "max": 4.055000066757202,
+        "mean": 0.8198437501083721
+      },
+      "adoptMs": {
+        "n": 352,
+        "min": 0,
+        "p50": 0.004999995231628418,
+        "p95": 0.009999990463256836,
+        "p99": 0.009999990463256836,
+        "max": 0.010000109672546387,
+        "mean": 0.004403408278118481
+      },
+      "framesReceived": 759,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 184942592,
+        "frames": 592,
+        "packMs": {
+          "n": 611,
+          "min": 0.13499999046325684,
+          "p50": 0.2200000286102295,
+          "p95": 0.2799999713897705,
+          "p99": 0.33500003814697266,
+          "max": 0.3900001049041748,
+          "mean": 0.22873977358329511
+        },
+        "renderMs": null,
+        "posts": 611,
+        "rafInterval": {
+          "n": 591,
+          "min": 7.945000052452087,
+          "p50": 8.400000095367432,
+          "p95": 8.800000071525574,
+          "p99": 9.009999990463257,
+          "max": 9.18500006198883,
+          "mean": 8.44858714045607
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5104.438,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 330.721,
+          "tasks": 2292,
+          "taskP50Ms": 0.014,
+          "taskP95Ms": 0.993,
+          "taskMaxMs": 2.001,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3185083",
+            "busyMs": 2636.926,
+            "tasks": 1237,
+            "taskP50Ms": 0.036,
+            "taskP95Ms": 4.66,
+            "taskMaxMs": 8.578,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 64.7908741373683,
+        "workerBusyMsPerSec": 516.5947749781661,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 164.066,
+            "tasks": 1388,
+            "taskP50Ms": 0.051,
+            "taskP95Ms": 0.324,
+            "taskMaxMs": 1.894,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 62.701,
+            "tasks": 1614,
+            "taskP50Ms": 0.027,
+            "taskP95Ms": 0.134,
+            "taskMaxMs": 0.197,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.819999999999993,
+        "perType": {
+          "browser": 0.1600000000000037,
+          "zygote": 0,
+          "gpu-process": 0.28999999999999915,
+          "utility": 0.25,
+          "renderer": 3.1200000000000045
+        },
+        "cpuPerSecond": 0.7639327739253642
+      }
+    },
+    {
+      "contender": "c3",
+      "rep": 2,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5002.570000052452,
+      "bytes": 193921024,
+      "mibPerSec": 36.968498191541734,
+      "rafFrames": 285,
+      "rafFps": 56.970717050838225,
+      "rafInterval": {
+        "n": 284,
+        "min": 16.65999999998894,
+        "p50": 17.585000000006403,
+        "p95": 18.580000000001746,
+        "p99": 18.779999999998836,
+        "max": 19.020000000004075,
+        "mean": 17.55919014084506
+      },
+      "longFrames": {
+        "over16_7": 189,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 285,
+        "min": 0.05000007152557373,
+        "p50": 0.7899999618530273,
+        "p95": 0.9149999618530273,
+        "p99": 1.1549999713897705,
+        "max": 1.465000033378601,
+        "mean": 0.789228069573118
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 3.8899999856948853,
+        "p50": 12.664999961853027,
+        "p95": 19.3400000333786,
+        "p99": 19.730000019073486,
+        "max": 19.730000019073486,
+        "mean": 11.683684217302423
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.159999966621399,
+        "p50": 9.590000033378601,
+        "p95": 17.49500000476837,
+        "p99": 17.894999980926514,
+        "max": 17.894999980926514,
+        "mean": 9.769999999749032
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 354,
+        "min": 0.04500007629394531,
+        "p50": 0.7849999666213989,
+        "p95": 0.8899999856948853,
+        "p99": 1.2450000047683716,
+        "max": 3.7949999570846558,
+        "mean": 0.7899858779826406
+      },
+      "adoptMs": {
+        "n": 354,
+        "min": 0,
+        "p50": 0.004999995231628418,
+        "p95": 0.005000114440917969,
+        "p99": 0.009999990463256836,
+        "max": 0.05500006675720215,
+        "mean": 0.0033333315014165673
+      },
+      "framesReceived": 761,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 193921024,
+        "frames": 594,
+        "packMs": {
+          "n": 614,
+          "min": 0.13499999046325684,
+          "p50": 0.21999990940093994,
+          "p95": 0.2749999761581421,
+          "p99": 0.33500003814697266,
+          "max": 0.5750000476837158,
+          "mean": 0.2234283425520608
+        },
+        "renderMs": null,
+        "posts": 614,
+        "rafInterval": {
+          "n": 593,
+          "min": 7.944999933242798,
+          "p50": 8.360000014305115,
+          "p95": 8.77999997138977,
+          "p99": 8.870000004768372,
+          "max": 8.975000023841858,
+          "mean": 8.427065767284992
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5106.325,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 320.269,
+          "tasks": 2306,
+          "taskP50Ms": 0.013,
+          "taskP95Ms": 0.958,
+          "taskMaxMs": 1.738,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3185268",
+            "busyMs": 2631.722,
+            "tasks": 1241,
+            "taskP50Ms": 0.034,
+            "taskP95Ms": 4.665,
+            "taskMaxMs": 8.606,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 62.72005796732484,
+        "workerBusyMsPerSec": 515.3847434309411,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 162.344,
+            "tasks": 1389,
+            "taskP50Ms": 0.051,
+            "taskP95Ms": 0.326,
+            "taskMaxMs": 0.63,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 63.658,
+            "tasks": 1630,
+            "taskP50Ms": 0.027,
+            "taskP95Ms": 0.131,
+            "taskMaxMs": 0.259,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.819999999999993,
+        "perType": {
+          "browser": 0.19000000000000128,
+          "zygote": 0,
+          "gpu-process": 0.2799999999999976,
+          "utility": 0.25,
+          "renderer": 3.099999999999998
+        },
+        "cpuPerSecond": 0.7636075057340408
+      }
+    },
+    {
+      "contender": "c4",
+      "rep": 0,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5000.414999961853,
+      "bytes": 195559424,
+      "mibPerSec": 37.29690435722291,
+      "rafFrames": 284,
+      "rafFps": 56.795285991696005,
+      "rafInterval": {
+        "n": 283,
+        "min": 16.65999999998894,
+        "p50": 17.580000000001746,
+        "p95": 18.589999999996508,
+        "p99": 18.779999999998836,
+        "max": 19.05999999999767,
+        "mean": 17.574664310954027
+      },
+      "longFrames": {
+        "over16_7": 201,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 284,
+        "min": 0.06500005722045898,
+        "p50": 0.8000000715255737,
+        "p95": 0.8949999809265137,
+        "p99": 1.1200000047683716,
+        "max": 1.409999966621399,
+        "mean": 0.7993838031527022
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 4.295000076293945,
+        "p50": 12.274999976158142,
+        "p95": 19.320000052452087,
+        "p99": 20.87999999523163,
+        "max": 20.87999999523163,
+        "mean": 12.044473723361367
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.1200000047683716,
+        "p50": 8.790000081062317,
+        "p95": 16.72000002861023,
+        "p99": 17.634999990463257,
+        "max": 17.634999990463257,
+        "mean": 9.255526360712553
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 352,
+        "min": 0.039999961853027344,
+        "p50": 0.7749999761581421,
+        "p95": 0.8650000095367432,
+        "p99": 1.1549999713897705,
+        "max": 4.335000038146973,
+        "mean": 0.7813494340939955
+      },
+      "adoptMs": {
+        "n": 352,
+        "min": 0.009999990463256836,
+        "p50": 0.019999980926513672,
+        "p95": 0.034999966621398926,
+        "p99": 0.04999995231628418,
+        "max": 0.16499996185302734,
+        "mean": 0.023309656503525646
+      },
+      "framesReceived": 0,
+      "torn": 2,
+      "worker": {
+        "bytesFed": 195559424,
+        "frames": 595,
+        "packMs": {
+          "n": 614,
+          "min": 0.13999998569488525,
+          "p50": 0.21500003337860107,
+          "p95": 0.25,
+          "p99": 0.32499992847442627,
+          "max": 0.5299999713897705,
+          "mean": 0.2200651463934187
+        },
+        "renderMs": null,
+        "posts": 614,
+        "rafInterval": {
+          "n": 594,
+          "min": 7.995000004768372,
+          "p50": 8.325000047683716,
+          "p95": 8.745000004768372,
+          "p99": 8.819999933242798,
+          "max": 9.09499990940094,
+          "mean": 8.404705387173276
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5104.285,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 300.796,
+          "tasks": 1684,
+          "taskP50Ms": 0.006,
+          "taskP95Ms": 1.006,
+          "taskMaxMs": 1.54,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3185423",
+            "busyMs": 2611.819,
+            "tasks": 627,
+            "taskP50Ms": 4.249,
+            "taskP95Ms": 4.688,
+            "taskMaxMs": 8.497,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 58.9300950084096,
+        "workerBusyMsPerSec": 511.69145139818795,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 165.849,
+            "tasks": 1381,
+            "taskP50Ms": 0.051,
+            "taskP95Ms": 0.337,
+            "taskMaxMs": 0.989,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 63.404,
+            "tasks": 1636,
+            "taskP50Ms": 0.026,
+            "taskP95Ms": 0.128,
+            "taskMaxMs": 0.23,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.759999999999991,
+        "perType": {
+          "browser": 0.1599999999999966,
+          "zygote": 0,
+          "gpu-process": 0.2900000000000027,
+          "utility": 0.240000000000002,
+          "renderer": 3.0700000000000003
+        },
+        "cpuPerSecond": 0.7519375891858325
+      }
+    },
+    {
+      "contender": "c4",
+      "rep": 1,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5000.924999952316,
+      "bytes": 187629568,
+      "mibPerSec": 35.78088053744181,
+      "rafFrames": 285,
+      "rafFps": 56.98945695100756,
+      "rafInterval": {
+        "n": 284,
+        "min": 16.65999999998894,
+        "p50": 17.585000000006403,
+        "p95": 18.629999999990105,
+        "p99": 18.804999999993015,
+        "max": 19.045000000012806,
+        "mean": 17.578591549295798
+      },
+      "longFrames": {
+        "over16_7": 188,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 285,
+        "min": 0.06499993801116943,
+        "p50": 0.8049999475479126,
+        "p95": 0.9900000095367432,
+        "p99": 1.190000057220459,
+        "max": 1.4550000429153442,
+        "mean": 0.8114210534514043
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 1.024999976158142,
+        "p50": 11.009999990463257,
+        "p95": 20.419999957084656,
+        "p99": 20.639999985694885,
+        "max": 20.639999985694885,
+        "mean": 11.255789474437112
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 1.024999976158142,
+        "p50": 9.059999942779541,
+        "p95": 17.260000109672546,
+        "p99": 18.664999961853027,
+        "max": 18.664999961853027,
+        "mean": 9.370789477699681
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 353,
+        "min": 0.03500008583068848,
+        "p50": 0.7750000953674316,
+        "p95": 0.9499999284744263,
+        "p99": 1.2549999952316284,
+        "max": 3.8850001096725464,
+        "mean": 0.7932294634178745
+      },
+      "adoptMs": {
+        "n": 353,
+        "min": 0.009999990463256836,
+        "p50": 0.02499997615814209,
+        "p95": 0.034999966621398926,
+        "p99": 0.04999995231628418,
+        "max": 0.0700000524520874,
+        "mean": 0.023342774542465427
+      },
+      "framesReceived": 0,
+      "torn": 3,
+      "worker": {
+        "bytesFed": 187629568,
+        "frames": 591,
+        "packMs": {
+          "n": 610,
+          "min": 0.13999998569488525,
+          "p50": 0.21500003337860107,
+          "p95": 0.28000009059906006,
+          "p99": 0.3349999189376831,
+          "max": 0.4200000762939453,
+          "mean": 0.22498360813641158
+        },
+        "renderMs": null,
+        "posts": 610,
+        "rafInterval": {
+          "n": 590,
+          "min": 7.9049999713897705,
+          "p50": 8.384999990463257,
+          "p95": 8.799999952316284,
+          "p99": 9.02999997138977,
+          "max": 9.495000004768372,
+          "mean": 8.460889830427655
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5105.296,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 309.035,
+          "tasks": 1770,
+          "taskP50Ms": 0.006,
+          "taskP95Ms": 1.016,
+          "taskMaxMs": 1.667,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3185652",
+            "busyMs": 2629.53,
+            "tasks": 622,
+            "taskP50Ms": 4.3,
+            "taskP95Ms": 4.761,
+            "taskMaxMs": 8.592,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 60.53223946270696,
+        "workerBusyMsPerSec": 515.0592639486525,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 165.753,
+            "tasks": 1391,
+            "taskP50Ms": 0.051,
+            "taskP95Ms": 0.327,
+            "taskMaxMs": 1.818,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 63.526,
+            "tasks": 1628,
+            "taskP50Ms": 0.026,
+            "taskP95Ms": 0.133,
+            "taskMaxMs": 0.252,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.8799999999999955,
+        "perType": {
+          "browser": 0.18999999999999773,
+          "zygote": 0,
+          "gpu-process": 0.3000000000000007,
+          "utility": 0.3000000000000007,
+          "renderer": 3.09
+        },
+        "cpuPerSecond": 0.7758564665610845
+      }
+    },
+    {
+      "contender": "c4",
+      "rep": 2,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5004.399999976158,
+      "bytes": 194838528,
+      "mibPerSec": 37.129825753513956,
+      "rafFrames": 285,
+      "rafFps": 56.94988410226157,
+      "rafInterval": {
+        "n": 284,
+        "min": 16.65999999998894,
+        "p50": 17.604999999995925,
+        "p95": 18.619999999995343,
+        "p99": 18.80999999999767,
+        "max": 18.89999999999418,
+        "mean": 17.57339788732395
+      },
+      "longFrames": {
+        "over16_7": 168,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 285,
+        "min": 0.060000061988830566,
+        "p50": 0.7999999523162842,
+        "p95": 0.9199999570846558,
+        "p99": 1.1050000190734863,
+        "max": 1.5800000429153442,
+        "mean": 0.8003508818776984
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 19,
+        "min": 1.9950000047683716,
+        "p50": 12.18999993801117,
+        "p95": 17.665000081062317,
+        "p99": 17.824999928474426,
+        "max": 17.824999928474426,
+        "mean": 11.268684186433491
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 2,
+        "p50": 12.18999993801117,
+        "p95": 17.675000071525574,
+        "p99": 17.829999923706055,
+        "max": 17.829999923706055,
+        "mean": 11.27342102402135
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": {
+        "n": 353,
+        "min": 0.039999961853027344,
+        "p50": 0.7700001001358032,
+        "p95": 0.8949999809265137,
+        "p99": 1.090000033378601,
+        "max": 3.9600000381469727,
+        "mean": 0.7825070852598455
+      },
+      "adoptMs": {
+        "n": 353,
+        "min": 0.009999990463256836,
+        "p50": 0.019999980926513672,
+        "p95": 0.03000009059906006,
+        "p99": 0.040000081062316895,
+        "max": 0.059999942779541016,
+        "mean": 0.021798864302486603
+      },
+      "framesReceived": 0,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 194838528,
+        "frames": 596,
+        "packMs": {
+          "n": 616,
+          "min": 0.13999998569488525,
+          "p50": 0.21500003337860107,
+          "p95": 0.2700001001358032,
+          "p99": 0.36000001430511475,
+          "max": 0.6299999952316284,
+          "mean": 0.22240259914429156
+        },
+        "renderMs": null,
+        "posts": 616,
+        "rafInterval": {
+          "n": 595,
+          "min": 7.879999995231628,
+          "p50": 8.325000047683716,
+          "p95": 8.735000014305115,
+          "p99": 8.875,
+          "max": 9.039999961853027,
+          "mean": 8.401789916062555
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5108.261,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 302.079,
+          "tasks": 1697,
+          "taskP50Ms": 0.006,
+          "taskP95Ms": 1,
+          "taskMaxMs": 1.801,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3185833",
+            "busyMs": 2614.833,
+            "tasks": 628,
+            "taskP50Ms": 4.259,
+            "taskP95Ms": 4.687,
+            "taskMaxMs": 8.621,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 59.13538873601016,
+        "workerBusyMsPerSec": 511.88320252234564,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 166.526,
+            "tasks": 1387,
+            "taskP50Ms": 0.052,
+            "taskP95Ms": 0.331,
+            "taskMaxMs": 1.651,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 64.038,
+            "tasks": 1607,
+            "taskP50Ms": 0.027,
+            "taskP95Ms": 0.13,
+            "taskMaxMs": 0.396,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.7700000000000102,
+        "perType": {
+          "browser": 0.17999999999999972,
+          "zygote": 0,
+          "gpu-process": 0.28999999999999915,
+          "utility": 0.25,
+          "renderer": 3.049999999999997
+        },
+        "cpuPerSecond": 0.7533370633878129
+      }
+    },
+    {
+      "contender": "c5",
+      "rep": 0,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5005.360000014305,
+      "bytes": 157745152,
+      "mibPerSec": 30.05528073896184,
+      "rafFrames": 289,
+      "rafFps": 57.73810475154115,
+      "rafInterval": {
+        "n": 288,
+        "min": 16.635000000009313,
+        "p50": 17.05999999999767,
+        "p95": 20.94999999999709,
+        "p99": 21.44000000000233,
+        "max": 21.630000000004657,
+        "mean": 17.302795138888897
+      },
+      "longFrames": {
+        "over16_7": 202,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 289,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.004999995231628418,
+        "p99": 0.009999990463256836,
+        "max": 0.009999990463256836,
+        "mean": 0.002560553253728213
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 20,
+        "min": 0.2900000810623169,
+        "p50": 1.5049999952316284,
+        "p95": 3.440000057220459,
+        "p99": 3.4749999046325684,
+        "max": 3.4749999046325684,
+        "mean": 1.2969999969005586
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 0.5199999809265137,
+        "p50": 5.394999980926514,
+        "p95": 13.450000047683716,
+        "p99": 14.610000014305115,
+        "max": 14.610000014305115,
+        "mean": 6.9471052634088615
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": null,
+      "adoptMs": null,
+      "framesReceived": 0,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 157745152,
+        "frames": 600,
+        "packMs": {
+          "n": 620,
+          "min": 0.14499998092651367,
+          "p50": 0.21500003337860107,
+          "p95": 0.24500000476837158,
+          "p99": 0.27500009536743164,
+          "max": 0.3799999952316284,
+          "mean": 0.21812903188890026
+        },
+        "renderMs": {
+          "n": 620,
+          "min": 0.010000109672546387,
+          "p50": 0.7649999856948853,
+          "p95": 0.8700000047683716,
+          "p99": 1,
+          "max": 1.5750000476837158,
+          "mean": 0.7499274205776953
+        },
+        "posts": 0,
+        "rafInterval": {
+          "n": 599,
+          "min": 7.435000061988831,
+          "p50": 8.264999985694885,
+          "p95": 8.725000023841858,
+          "p99": 8.894999980926514,
+          "max": 9.855000019073486,
+          "mean": 8.34601001667857
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5109.043,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 44.373,
+          "tasks": 792,
+          "taskP50Ms": 0.06,
+          "taskP95Ms": 0.117,
+          "taskMaxMs": 0.705,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3186064",
+            "busyMs": 2672.325,
+            "tasks": 2514,
+            "taskP50Ms": 0.01,
+            "taskP95Ms": 4.52,
+            "taskMaxMs": 9.036,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 8.685188204522843,
+        "workerBusyMsPerSec": 523.0578407737027,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 238.41,
+            "tasks": 1691,
+            "taskP50Ms": 0.112,
+            "taskP95Ms": 0.401,
+            "taskMaxMs": 0.702,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 74.386,
+            "tasks": 2448,
+            "taskP50Ms": 0.014,
+            "taskP95Ms": 0.132,
+            "taskMaxMs": 0.244,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 3.6299999999999812,
+        "perType": {
+          "browser": 0.19000000000000128,
+          "zygote": 0,
+          "gpu-process": 0.379999999999999,
+          "utility": 0.2699999999999996,
+          "renderer": 2.789999999999999
+        },
+        "cpuPerSecond": 0.7252225614120875
+      }
+    },
+    {
+      "contender": "c5",
+      "rep": 1,
+      "scenario": "flood-1pane-200x55",
+      "elapsedMs": 5001.014999985695,
+      "bytes": 156827648,
+      "mibPerSec": 29.90642899499958,
+      "rafFrames": 439,
+      "rafFps": 87.78218021766696,
+      "rafInterval": {
+        "n": 438,
+        "min": 8.485000000000582,
+        "p50": 11.544999999998254,
+        "p95": 11.714999999996508,
+        "p99": 11.985000000000582,
+        "max": 16.66500000000815,
+        "mean": 11.397739726027378
+      },
+      "longFrames": {
+        "over16_7": 0,
+        "over33": 0,
+        "over100": 0
+      },
+      "frameWorkMs": {
+        "n": 439,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.004999995231628418,
+        "p99": 0.009999990463256836,
+        "max": 0.02499997615814209,
+        "mean": 0.0022779054142076497
+      },
+      "longTasks": {
+        "count": 0,
+        "totalMs": 0,
+        "dur": null
+      },
+      "keyEchoMs": {
+        "n": 20,
+        "min": 0.33000004291534424,
+        "p50": 2.3100000619888306,
+        "p95": 4.265000104904175,
+        "p99": 4.354999899864197,
+        "max": 4.354999899864197,
+        "mean": 2.2297500312328338
+      },
+      "keyToRafMs": {
+        "n": 19,
+        "min": 0.3450000286102295,
+        "p50": 10.174999952316284,
+        "p95": 10.660000085830688,
+        "p99": 11.004999995231628,
+        "max": 11.004999995231628,
+        "mean": 8.748421079234072
+      },
+      "eventTimingMs": null,
+      "packMs": null,
+      "renderMs": null,
+      "adoptMs": null,
+      "framesReceived": 0,
+      "torn": 0,
+      "worker": {
+        "bytesFed": 156827648,
+        "frames": 598,
+        "packMs": {
+          "n": 618,
+          "min": 0.14499998092651367,
+          "p50": 0.21500003337860107,
+          "p95": 0.25,
+          "p99": 0.31499993801116943,
+          "max": 0.36500000953674316,
+          "mean": 0.21987864037547683
+        },
+        "renderMs": {
+          "n": 618,
+          "min": 0.009999990463256836,
+          "p50": 0.7799999713897705,
+          "p95": 0.8999999761581421,
+          "p99": 1.2950000762939453,
+          "max": 1.7999999523162842,
+          "mean": 0.7726699048261426
+        },
+        "posts": 0,
+        "rafInterval": {
+          "n": 597,
+          "min": 7.449999928474426,
+          "p50": 8.289999961853027,
+          "p95": 8.764999985694885,
+          "p99": 9.099999904632568,
+          "max": 9.389999985694885,
+          "mean": 8.365092127367081
+        }
+      },
+      "trace": {
+        "error": null,
+        "spanMs": 5105.57,
+        "main": {
+          "thread": "CrRendererMain",
+          "key": "3183463/3183463",
+          "busyMs": 64.131,
+          "tasks": 1131,
+          "taskP50Ms": 0.058,
+          "taskP95Ms": 0.12,
+          "taskMaxMs": 1.521,
+          "longTasks": 0,
+          "longTaskP95Ms": null,
+          "longTaskMaxMs": null
+        },
+        "workers": [
+          {
+            "thread": "DedicatedWorker thread",
+            "key": "3183463/3186244",
+            "busyMs": 2705.319,
+            "tasks": 3462,
+            "taskP50Ms": 0.011,
+            "taskP95Ms": 4.408,
+            "taskMaxMs": 8.629,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ],
+        "mainBusyMsPerSec": 12.56098731385526,
+        "workerBusyMsPerSec": 529.8759981745427,
+        "gpuProcess": [
+          {
+            "thread": "CrGpuMain",
+            "key": "3183085/3183085",
+            "busyMs": 295.376,
+            "tasks": 2273,
+            "taskP50Ms": 0.063,
+            "taskP95Ms": 0.369,
+            "taskMaxMs": 1.756,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          },
+          {
+            "thread": "VizCompositorThread",
+            "key": "3183085/3183181",
+            "busyMs": 115.869,
+            "tasks": 3535,
+            "taskP50Ms": 0.014,
+            "taskP95Ms": 0.137,
+            "taskMaxMs": 0.421,
+            "longTasks": 0,
+            "longTaskP95Ms": null,
+            "longTaskMaxMs": null
+          }
+        ]
+      },
+      "cpu": {
+        "totalSeconds": 4.199999999999989,
+        "perType": {
+          "browser": 0.28999999999999915,
+          "zygote": 0,
+          "gpu-process": 0.5100000000000016,
+          "utility": 0.48999999999999844,
+          "renderer": 2.9099999999999966
+        },
+        "cpuPerSecond": 0.8398295146109345
+      }
+    }
+  ]
+}
