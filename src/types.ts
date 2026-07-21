@@ -1,7 +1,7 @@
 import type { ITheme, Terminal } from '@xterm/xterm';
 import type { ThemeName } from './themes.js';
 
-export type RendererKind = 'webgl' | 'canvas' | 'dom';
+export type RendererKind = 'vtgl' | 'webgl' | 'canvas' | 'dom';
 
 /** A face to load through the FontFace API before the Terminal is constructed. */
 export interface FontSpec {
@@ -14,7 +14,13 @@ export interface FontSpec {
 }
 
 export interface RendererOptions {
-  /** 'auto' probes webgl2/webgl, then canvas, then dom. Default 'auto'. */
+  /**
+   * 'auto' probes webgl2/webgl, then canvas, then dom. 'vtgl' is never reached
+   * by 'auto': it draws through vtgl with its own Arabic shaper but drops
+   * features the shipped renderers keep (see src/vtgl/adapter.ts), so it is used
+   * only when named explicitly, and falls through webgl, canvas and dom if it
+   * cannot start. Default 'auto'.
+   */
   prefer?: 'auto' | RendererKind;
   /** Fall through to the next renderer on WebGL context loss. Default true. */
   fallbackOnContextLoss?: boolean;
