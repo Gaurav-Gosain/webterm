@@ -56,6 +56,7 @@ import {
   arabicShaper,
   supportsWebGL2,
   type Renderer,
+  type ShaperHook,
   type Theme,
 } from 'vtgl';
 
@@ -182,6 +183,12 @@ export interface VtglAddonOptions {
    * not know the reordering happened.
    */
   arabicShaping?: boolean;
+  /**
+   * A pre-built shaper to install, taking precedence over `arabicShaping`. Used
+   * for the HarfBuzz shaper, which is loaded asynchronously (a wasm module) and
+   * so is constructed by the caller and handed in ready.
+   */
+  shaper?: ShaperHook;
   /** Force the Canvas2D backend, for comparing the two paths. */
   backend?: 'webgl2' | 'canvas2d';
 }
@@ -321,7 +328,11 @@ class VtglXtermRenderer {
       // The source hands vtgl attribute flags verbatim, INVERSE included, so
       // the renderer is the one that swaps.
       resolveInverse: true,
-      ...(options.arabicShaping ? { shaper: arabicShaper() } : {}),
+      ...(options.shaper
+        ? { shaper: options.shaper }
+        : options.arabicShaping
+          ? { shaper: arabicShaper() }
+          : {}),
     };
 
     this.vtgl =

@@ -80,12 +80,35 @@ export class RendererManager {
     if (!this.term.element) return false;
     try {
       const { VtglRendererAddon } = await import('./vtgl/adapter.js');
+      const vtgl = await import('vtgl');
       // The addon installs vtgl from inside activate(), which throws if neither
       // WebGL2 nor Canvas2D will start. loadAddon runs activate synchronously
       // here because the terminal is already open, so a failure surfaces as a
       // throw and the terminal keeps its DOM renderer, leaving the fallback
       // chain free to take over.
-      const addon = new VtglRendererAddon({ arabicShaping: true });
+      const params = new URLSearchParams(location.search);
+      // The HarfBuzz shaper rasters each glyph from its outline into a full-ink
+      // tile placed at the shaper's pen with no per-cell crop, so its WebGL2
+      // join has no seam; WebGL2 is therefore the default now. Canvas2D stays
+      // reachable via ?vtglBackend=canvas2d for a side-by-side comparison.
+      const backend = params.get('vtglBackend') === 'canvas2d' ? 'canvas2d' : 'webgl2';
+      // Shaper: HarfBuzz by default (correct marks and joins, engine
+      // independent). ?vtglShaper=pfb selects the zero-dependency
+      // presentation-forms shaper, and =none turns shaping off, for comparison.
+      const shaperMode = params.get('vtglShaper') ?? 'hb';
+      let shaper;
+      if (shaperMode === 'hb') {
+        try {
+          shaper = await vtgl.createHarfBuzzShaper();
+        } catch (e) {
+          console.warn('webterm: HarfBuzz shaper failed to load, using presentation forms', e);
+        }
+      }
+      const addon = new VtglRendererAddon(
+        shaper
+          ? { shaper, backend }
+          : { arabicShaping: shaperMode !== 'none', backend },
+      );
       this.term.loadAddon(addon);
       this.addon = addon;
       this.settle('vtgl');
