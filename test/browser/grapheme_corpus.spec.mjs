@@ -62,8 +62,10 @@ const CORPUS = [
   { name: 'emoji-two-flags', text: '\u{1f1ef}\u{1f1f5}\u{1f1fa}\u{1f1f8}', category: 'emoji-flags', ghostty: 4, cell0: 2 },
   { name: 'emoji-tag-flag', text: '\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}', category: 'emoji-flags', ghostty: 2, cell0: 2 },
   // A regional indicator with no pair. ghostty gives the lone RI its wide
-  // advance; xterm bills it narrow.
-  { name: 'emoji-ri-odd', text: '\u{1f1ef}', category: 'emoji-flags', ghostty: 2, xterm: 1, cell0: 1 },
+  // advance; the addon bills it narrow, so the override provider forces every
+  // indicator to two. A pair is unaffected: the second indicator keeps its
+  // join and the flag stays two columns. See src/unicode.ts.
+  { name: 'emoji-ri-odd', text: '\u{1f1ef}', category: 'emoji-flags', ghostty: 2, cell0: 2 },
 
   // Keycaps
   { name: 'emoji-keycap', text: '1\u{fe0f}\u{20e3}', category: 'emoji-keycap', ghostty: 2, cell0: 2 },
@@ -91,7 +93,10 @@ const CORPUS = [
   // Devanagari
   { name: 'devanagari-consonant', text: '\u{928}', category: 'devanagari', ghostty: 1, cell0: 1 },
   { name: 'devanagari-ksha', text: '\u{915}\u{94d}\u{937}', category: 'devanagari', ghostty: 2, cell0: 1 },
-  { name: 'devanagari-matra', text: '\u{928}\u{93f}', category: 'devanagari', ghostty: 2, xterm: 1, cell0: 1 },
+  // Consonant plus a spacing matra. ghostty counts the cluster two; the addon
+  // clusters it but bills the matra zero. The override provider restates the
+  // cluster width through the matra, which keeps its join. See src/unicode.ts.
+  { name: 'devanagari-matra', text: '\u{928}\u{93f}', category: 'devanagari', ghostty: 2, cell0: 2 },
 
   // Arabic
   { name: 'arabic-isolated', text: '\u{627}', category: 'arabic', ghostty: 1, cell0: 1 },
@@ -120,7 +125,7 @@ const CORPUS = [
  * The cases where xterm and ghostty-vt disagree, documented rather than papered
  * over. Derived from the corpus so the two cannot drift apart.
  *
- * All six are policy calls on degenerate or standalone input, not segmentation
+ * All four are policy calls on degenerate or standalone input, not segmentation
  * defects, and every one of them is a character written with nothing before it
  * on the line. Where these characters appear in real text rather than alone,
  * ZWNJ inside an Arabic word, ZWJ inside an emoji sequence, U+FEFF or ZWSP
@@ -130,13 +135,15 @@ const CORPUS = [
  * The standalone cases are not fixable from a width table. InputHandler only
  * suppresses the cursor advance on its joining branch, and that branch needs a
  * preceding cell to join onto; at column 0 there is none, so it writes the
- * codepoint into a cell of its own and moves on.
+ * codepoint into a cell of its own and moves on. Soft hyphen is worse still:
+ * InputHandler drops codepoint 173 before any provider is asked.
  *
- * The seventh entry, ZWSP between two letters, was fixed rather than
- * documented: it was the only one that occurred in ordinary text. The fix is
- * the override provider in src/unicode.ts, which delegates to the addon and
- * rewrites the single codepoint. That approach is what the rest of this list
- * would use if it ever needed to.
+ * Three former entries were fixed rather than documented, all through the
+ * override provider in src/unicode.ts: ZWSP between two letters, the only one
+ * that occurred in ordinary text; a lone regional indicator, forced wide like
+ * every indicator; and a Devanagari consonant plus spacing matra, whose width
+ * the override restates through the matra's own join. That approach is what the
+ * rest of this list would use if it ever needed to.
  */
 const DIVERGENCES = Object.fromEntries(
   CORPUS.filter((c) => c.xterm !== undefined).map((c) => [c.name, { ghostty: c.ghostty, xterm: c.xterm }]),
@@ -292,7 +299,7 @@ test('the ghostty divergences are exactly where we think they are', async ({ pag
   const byName = Object.fromEntries(measured.map((m) => [m.name, m]));
 
   expect(Object.keys(DIVERGENCES).sort()).toEqual([
-    'combining-mark-alone', 'devanagari-matra', 'emoji-ri-odd', 'soft-hyphen',
+    'combining-mark-alone', 'soft-hyphen',
     'zero-width-joiner-alone', 'zero-width-space-alone',
   ]);
 
@@ -360,4 +367,38 @@ test('the ZWSP override is what closes the gap, not the addon alone', async ({ p
 
   expect(result.withOverride).toBe(2);
   expect(result.withOverride).toBe(result.plain);
+});
+
+test('the regional-indicator and matra overrides widen only what they should', async ({ page }) => {
+  // Pins the two width overrides added alongside ZWSP, and does it in a way a
+  // vacuous "force everything to two" could not pass: a bare consonant stays
+  // one, and a flag stays two rather than becoming four, so the assertions
+  // distinguish the real fix (a lone indicator widened, a matra restating its
+  // cluster's width through a kept join) from a blanket rewrite.
+  await bootWithProvider(page);
+
+  const m = await page.evaluate(async () => {
+    const term = window.term.xterm;
+    const drain = () => new Promise((r) => term.write('', r));
+    const measure = async (text) => {
+      term.write('\x1b[H\x1b[2J\x1b[1;1H');
+      await drain();
+      term.write(text);
+      await drain();
+      return term.buffer.active.cursorX;
+    };
+    return {
+      loneRi: await measure('\u{1f1ef}'),
+      flag: await measure('\u{1f1ef}\u{1f1f5}'),
+      twoFlags: await measure('\u{1f1ef}\u{1f1f5}\u{1f1fa}\u{1f1f8}'),
+      consonant: await measure('\u{928}'),
+      matra: await measure('\u{928}\u{93f}'),
+    };
+  });
+
+  expect(m.loneRi).toBe(2);
+  expect(m.flag).toBe(2);
+  expect(m.twoFlags).toBe(4);
+  expect(m.consonant).toBe(1);
+  expect(m.matra).toBe(2);
 });

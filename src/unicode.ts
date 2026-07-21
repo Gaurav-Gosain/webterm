@@ -2,27 +2,50 @@
  * Unicode width overrides layered on top of a delegate provider.
  *
  * @xterm/addon-unicode-graphemes supplies the UAX 29 segmentation this package
- * depends on, and it is right about nearly everything. It is wrong about
- * U+200B ZERO WIDTH SPACE, which it bills one column. Every other emulator
- * worth comparing against, ghostty-vt and wcwidth included, gives it zero, and
- * unlike the other disagreements this one shows up in ordinary text: ZWSP is
- * the standard line-break opportunity marker, so a paragraph carrying a few of
- * them drifts a column right for each one.
+ * depends on, and it is right about nearly everything. Where it is not, this
+ * registers a provider that delegates every call to the addon's own provider
+ * and rewrites the result for a short list of codepoints, measured against
+ * ghostty-vt with mode 2027 grapheme clustering. It reuses the delegate's
+ * version string, so it simply replaces the addon in the UnicodeService
+ * registry and nothing that reads `terminal.unicode.activeVersion` has to know
+ * it exists.
  *
- * Rather than patch the addon, this registers a provider that delegates every
- * call to the addon's own provider and rewrites the result for a short list of
- * codepoints. It reuses the delegate's version string, so it simply replaces
- * the addon in the UnicodeService registry and nothing that reads
- * `terminal.unicode.activeVersion` has to know it exists.
+ * WHAT IS OVERRIDDEN, and why the addon is a column out on each:
+ *
+ *   U+200B ZERO WIDTH SPACE to 0. The addon bills it one column; every other
+ *     emulator worth comparing against, ghostty-vt and wcwidth included, gives
+ *     it zero. Unlike the rest this one shows up in ordinary text: ZWSP is the
+ *     standard line-break opportunity marker, so a paragraph carrying a few of
+ *     them drifts a column right for each one.
+ *   U+1F1E6 through U+1F1FF, the regional indicators, to 2. A pair forms a flag
+ *     and the addon already gives the pair its two columns, but a lone
+ *     indicator, the odd one left when a run has an odd length, it bills one.
+ *     ghostty gives every indicator two, paired or not. The override is a
+ *     no-op on the paired case: the second indicator keeps the delegate's join
+ *     and so still advances nothing, and the pair stays two columns.
+ *   U+093F DEVANAGARI VOWEL SIGN I to 2. It is a spacing matra: it renders in
+ *     its own column to the left of its consonant, and ghostty counts the
+ *     consonant-plus-matra cluster as two. The addon clusters the two but bills
+ *     the matra zero, leaving the cluster one column. The matra keeps the
+ *     delegate's join, so the 2 restates the cluster's width rather than adding
+ *     a separate cell. Only this matra is measured against the reference and so
+ *     only this one is shipped; the other spacing vowel signs are the same
+ *     question and would take the same entry once measured.
  *
  * WHAT IS DELIBERATELY NOT OVERRIDDEN BY DEFAULT, so nobody "fixes" it later:
  *
- *   U+00AD SOFT HYPHEN. xterm gives 0, ghostty 1. Accepted policy difference.
- *     It could not be changed here anyway: InputHandler.print() drops
- *     codepoint 173 before it ever asks a provider for its width.
- *   Devanagari matra (U+0928 U+093F). xterm gives the cluster 1 column,
- *     ghostty 2. Accepted policy difference; a spacing-mark question, not a
- *     zero-width one, and not reachable from a per-codepoint width table.
+ *   U+00AD SOFT HYPHEN. xterm gives 0, ghostty 1. Accepted policy difference,
+ *     and Unicode is with xterm here: a soft hyphen is a format character, laid
+ *     out only when a line breaks on it. It could not be changed here anyway:
+ *     InputHandler.print() drops codepoint 173 before it ever asks a provider
+ *     for its width.
+ *   U+1F3FB through U+1F3FF, the emoji modifiers, alone. A modifier follows an
+ *     emoji base in any real text, and after one the addon clusters and widths
+ *     it correctly. Standing alone at the start of a line it already measures
+ *     two; standing alone after a character that is not a modifier base the
+ *     addon joins it onto that character anyway, which is a segmentation call a
+ *     per-codepoint width table cannot condition on and must not force, since
+ *     forcing the join off would split every skin-toned emoji into two cells.
  *   U+200C ZERO WIDTH NON-JOINER and U+FEFF ZERO WIDTH NO-BREAK SPACE. Both
  *     already measure zero inside real text. Overriding them would be a no-op
  *     at best.
@@ -44,8 +67,22 @@
  */
 import type { Terminal } from '@xterm/xterm';
 
-/** The shipped default. Every entry needs a reason in the block above. */
-export const DEFAULT_OVERRIDES: Record<number, 0 | 1 | 2> = { 0x200b: 0 };
+/**
+ * The shipped default. Every entry needs a reason in the block above.
+ *
+ * The regional indicators are filled as a range rather than listed one at a
+ * time: an indicator is any of U+1F1E6 through U+1F1FF, so the fix has to cover
+ * the whole range or it only moves the misalignment to a flag the corpus does
+ * not name.
+ */
+function buildDefaults(): Record<number, 0 | 1 | 2> {
+  const map: Record<number, 0 | 1 | 2> = { 0x200b: 0 };
+  for (let cp = 0x1f1e6; cp <= 0x1f1ff; cp++) map[cp] = 2;
+  map[0x093f] = 2;
+  return map;
+}
+
+export const DEFAULT_OVERRIDES: Record<number, 0 | 1 | 2> = buildDefaults();
 
 /**
  * UnicodeService packs a property value as
@@ -110,8 +147,20 @@ export class OverrideProvider implements UnicodeProvider {
     // actually suppresses the advance: InputHandler only skips the cursor
     // increment on the joining branch, so a width of 0 without it would still
     // eat a column. This mirrors what xterm's own UnicodeV6 provider does for
-    // every zero-width scalar. A non-zero override is not a join.
-    const shouldJoin = override === 0 && preceding !== 0;
+    // every zero-width scalar.
+    //
+    // A non-zero override keeps the delegate's own join bit rather than
+    // clearing it. The addon sets that bit on the scalars it clusters, and
+    // InputHandler reads the width of a joining scalar back as the cluster's
+    // running width: for a joining scalar the override therefore restates what
+    // the whole cluster is worth, not what the scalar is worth on its own, and
+    // clearing the join here would split the cluster instead of rewidthing it.
+    // A regional indicator ending a pair, or a Devanagari matra after its
+    // consonant, is a joining scalar whose delegate width is one column short.
+    // A non-zero override on a non-joining scalar, a lone regional indicator
+    // with nothing to pair with, just replaces its width.
+    const { shouldJoin: delegateJoin } = unpackCharProperties(value);
+    const shouldJoin = override === 0 ? preceding !== 0 : delegateJoin;
     return packCharProperties(value >> CHAR_KIND_SHIFT, override, shouldJoin);
   }
 
