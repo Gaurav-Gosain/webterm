@@ -36,8 +36,18 @@ test('the packed property layout round trips', () => {
   }
 });
 
-test('the shipped default zeroes ZWSP and nothing else', () => {
-  assert.deepEqual(DEFAULT_OVERRIDES, { 0x200b: 0 });
+test('the shipped default zeroes ZWSP and widens the indicators and the matra', () => {
+  assert.equal(DEFAULT_OVERRIDES[0x200b], 0);
+  // Every regional indicator, both ends of the range and one in the middle.
+  assert.equal(DEFAULT_OVERRIDES[0x1f1e6], 2);
+  assert.equal(DEFAULT_OVERRIDES[0x1f1ef], 2);
+  assert.equal(DEFAULT_OVERRIDES[0x1f1ff], 2);
+  // The Devanagari spacing matra.
+  assert.equal(DEFAULT_OVERRIDES[0x093f], 2);
+  // Nothing outside those: 26 indicators, the matra and ZWSP.
+  assert.equal(Object.keys(DEFAULT_OVERRIDES).length, 26 + 2);
+  // A codepoint just past the indicator range is untouched.
+  assert.equal(DEFAULT_OVERRIDES[0x1f200], undefined);
 });
 
 test('a codepoint with no override is passed straight through', () => {
@@ -93,12 +103,37 @@ test('an empty override map is a pure pass-through', () => {
   assert.equal(provider.charProperties(0x200b, 1), delegate.charProperties(0x200b, 1));
 });
 
-test('a non-zero override sets the width without claiming a join', () => {
+test('a non-zero override sets the width and keeps the delegate not joining', () => {
+  // The fake delegate never joins, so a lone scalar override widens and advances
+  // on its own, which is the lone-regional-indicator case.
   const provider = new OverrideProvider(fakeDelegate(1), { 0x2500: 2 });
   const properties = unpackCharProperties(provider.charProperties(0x2500, 1));
   assert.equal(properties.width, 2);
   assert.equal(properties.shouldJoin, false);
   assert.equal(provider.wcwidth(0x2500), 2);
+});
+
+test('a non-zero override keeps the delegate join, so it rewidths a cluster', () => {
+  // When the delegate joins a scalar onto the cluster before it, InputHandler
+  // reads the returned width back as the cluster's running width. A non-zero
+  // override must keep that join, or a matra whose width it restates would be
+  // split off into a cell of its own instead. This is the failure a naive
+  // "non-zero means no join" would have shipped for the second regional
+  // indicator of a flag and for a spacing matra.
+  const joiningDelegate: UnicodeProvider = {
+    version: '15-graphemes',
+    ambiguousCharsAreWide: false,
+    charProperties(codepoint: number) {
+      return packCharProperties(codepoint & 0xff, 1, true);
+    },
+    wcwidth() {
+      return 1;
+    },
+  };
+  const provider = new OverrideProvider(joiningDelegate, { 0x93f: 2 });
+  const properties = unpackCharProperties(provider.charProperties(0x93f, 1));
+  assert.equal(properties.width, 2);
+  assert.equal(properties.shouldJoin, true);
 });
 
 test('the version string is taken from the delegate, so it displaces it in the registry', () => {

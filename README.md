@@ -50,7 +50,7 @@ Every image below is the built package in a real browser: the terminals are real
 - Handles OSC 52 clipboard writes, which xterm.js registers no handler for, and decodes the payload as UTF-8 rather than as the Latin-1 string `atob` hands back.
 - Falls back to a hidden textarea and `document.execCommand('copy')` where `navigator.clipboard` is absent, which is every non-secure context: a LAN IP, an http reverse proxy, any deployment without TLS that is not localhost.
 - Retries a clipboard write refused for want of a user gesture on the next `pointerdown` or `keydown`, once, and reports `written: false` when every strategy was refused rather than failing silently.
-- Installs `@xterm/addon-unicode-graphemes` for UAX 29 segmentation and layers a per-codepoint width override on top of it. The shipped map has one entry, U+200B to zero width, because a zero-width space that eats a column visibly breaks alignment in ordinary text.
+- Installs `@xterm/addon-unicode-graphemes` for UAX 29 segmentation and layers a per-codepoint width override on top of it. The shipped map has three: U+200B to zero, because a zero-width space that eats a column visibly breaks alignment in ordinary text; the regional indicators to two, because the addon bills a lone one narrow where ghostty gives every indicator its flag width; and the Devanagari spacing vowel sign I to two, restated through the matra's own cluster join. Each was measured against ghostty-vt.
 - Checks those widths against a 45-case corpus measured from ghostty-vt with mode 2027 clustering enabled, of which 39 agree and 6 diverge in documented, degenerate cases.
 - Probes for a real WebGL context on a throwaway canvas before loading `@xterm/addon-webgl`, since a blocklisted driver exposes the constructor and still refuses the context, and falls through webgl, canvas and dom, including on a context loss after startup.
 - Coalesces every chunk written inside one animation frame into a single `term.write`, reusing a 64 KB scratch buffer so the multi-chunk case does not allocate.
@@ -357,7 +357,7 @@ Top level: `fontFamily`, `fontSize`, `fonts`, `lineHeight`, `theme`, `cursorBlin
 | --- | --- |
 | `renderer` | `prefer` (`'auto'`), `fallbackOnContextLoss` (`true`) |
 | `clipboard` | `osc52` (`true`), `osc52Read` (`false`), `copyOnSelect` (`false`), `write` |
-| `unicode` | `provider` (`'graphemes'`), `overrides` (`{ 0x200b: 0 }`) |
+| `unicode` | `provider` (`'graphemes'`), `overrides` (`DEFAULT_OVERRIDES`: U+200B to 0, the regional indicators and U+093F to 2) |
 | `graphics` | `kitty` (`true`), `sixel` (`false`) |
 | `keyboard` | `kitty` (`true`), `captureReservedKeys` (`true`), `reservedKeys`, `onKeyEvent` |
 | `mouse` | `suppressContextMenu` (`true`), `dedupeMotion` (`true`) |
@@ -559,7 +559,7 @@ OSC 52 is decoded as UTF-8, not Latin-1. `atob` yields one character per byte an
 
 The provider is `@xterm/addon-unicode-graphemes` (UAX 29) with a per-codepoint override table layered on top. The override provider delegates every call to the addon's own provider, rewrites the packed property value for the codepoints in the map, and reuses the delegate's version string so it displaces the addon in xterm's registry without anything that reads `terminal.unicode.activeVersion` having to know it exists.
 
-The shipped table has exactly one entry, `{ 0x200b: 0 }`. `src/unicode.ts` records, at length, the five things that are deliberately not overridden and why, so that nobody adds them later: U+00AD (dropped by `InputHandler.print()` before a provider is ever asked), Devanagari matra (a spacing-mark question a width table cannot reach), U+200C and U+FEFF (already zero inside real text), U+200D (zeroing it re-advances every emoji ZWJ sequence), and the Cf general category as a whole (too blunt). `unicode.overrides` takes any map you prefer, and `{}` turns the layer off.
+The shipped table zeroes U+200B, widens the regional indicators U+1F1E6 through U+1F1FF to two, and widens U+093F to two. A non-zero override keeps the delegate's own join bit, so widening a scalar that the addon has clustered onto what precedes it, the second indicator of a flag, a spacing matra after its consonant, restates the cluster's running width rather than splitting a cell off. `src/unicode.ts` records, at length, the things that are deliberately not overridden and why, so that nobody adds them later: U+00AD (dropped by `InputHandler.print()` before a provider is ever asked), the emoji modifiers standing alone (already two at column 0, and after a non-base character the addon joins them anyway, a segmentation call a width table must not force), U+200C and U+FEFF (already zero inside real text), U+200D (zeroing it re-advances every emoji ZWJ sequence), and the Cf general category as a whole (too blunt). `unicode.overrides` takes any map you prefer, and `{}` turns the layer off.
 
 The table was checked against ghostty-vt, driven with mode 2027 clustering enabled: 45 cases, 39 agreeing and 6 diverging. Those six are listed in [docs/limits.md](docs/limits.md) rather than papered over. ghostty-vt is not a dependency and must not become one; it was the oracle, and the numbers are what ship.
 
