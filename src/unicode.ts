@@ -32,20 +32,50 @@
  *     only this one is shipped; the other spacing vowel signs are the same
  *     question and would take the same entry once measured.
  *
+ * WHAT IS RESEGMENTED (not a width entry, a join-gate on the segmenter):
+ *
+ *   U+1F3FB through U+1F3FF, the emoji modifiers (Fitzpatrick skin tones), when
+ *     they do NOT follow an emoji base. This is not a per-codepoint width entry;
+ *     it is a targeted correction to one segmentation decision, so it lives in
+ *     the provider rather than in DEFAULT_OVERRIDES. A modifier is
+ *     Emoji_Presentation=Yes and renders as a wide colour swatch, so ghostty and
+ *     the corpus give it two columns. The addon already widths it two, and after
+ *     a real emoji base (U+1F44D THUMBS UP, U+261D INDEX POINTING UP, any
+ *     Extended_Pictographic) it correctly folds the modifier into a single
+ *     two-column cluster: that case is left completely alone. The defect is
+ *     UAX #29 GB9, "do not break before Extend": a lone modifier after a
+ *     NON-base character, such as the `[` a reproducer wraps it in, is a grapheme
+ *     Extend, so the addon joins it onto that character and widens it in place
+ *     instead of standing the modifier up as its own two-column swatch. That
+ *     costs the sequence a column. UTS #51's emoji model is the authority for
+ *     display here and it disagrees with a blind GB9: an emoji modifier forms an
+ *     emoji_modifier_sequence only with an emoji_modifier_base, and a modifier
+ *     with no base is shown as the standalone swatch. So when the preceding
+ *     cell's grapheme kind is not Extended_Pictographic, the provider re-asks the
+ *     delegate as if the modifier were at the start of the line, which yields its
+ *     own width-2, non-joining cluster. Extended_Pictographic is used as the gate
+ *     because it is the only base signal the addon's packed property carries; it
+ *     is a safe superset of Emoji_Modifier_Base (every modifier base is
+ *     Extended_Pictographic), so no real base+modifier sequence is split. A
+ *     modifier following an Extended_Pictographic that is not itself a modifier
+ *     base is the only theoretical gap, and it does not occur in real text.
+ *
  * WHAT IS DELIBERATELY NOT OVERRIDDEN BY DEFAULT, so nobody "fixes" it later:
  *
- *   U+00AD SOFT HYPHEN. xterm gives 0, ghostty 1. Accepted policy difference,
- *     and Unicode is with xterm here: a soft hyphen is a format character, laid
- *     out only when a line breaks on it. It could not be changed here anyway:
- *     InputHandler.print() drops codepoint 173 before it ever asks a provider
- *     for its width.
- *   U+1F3FB through U+1F3FF, the emoji modifiers, alone. A modifier follows an
- *     emoji base in any real text, and after one the addon clusters and widths
- *     it correctly. Standing alone at the start of a line it already measures
- *     two; standing alone after a character that is not a modifier base the
- *     addon joins it onto that character anyway, which is a segmentation call a
- *     per-codepoint width table cannot condition on and must not force, since
- *     forcing the join off would split every skin-toned emoji into two cells.
+ *   U+00AD SOFT HYPHEN. xterm gives it 0, ghostty 1. This is a deliberate,
+ *     documented divergence and ghostty is the opinionated one here, so it is
+ *     left exactly as xterm has it and must not be "corrected" to match the
+ *     reference. U+00AD is General_Category Cf (Format): a conditional
+ *     line-break/hyphenation hint that a text engine renders only when a line
+ *     actually breaks on it. A terminal never hyphenates, so a soft hyphen has
+ *     no visible role and correctly contributes zero width, which is what
+ *     wcwidth and xterm both do. Ghostty's choice to draw it as a visible
+ *     width-1 glyph is the less-correct one: making it visible here would put a
+ *     stray hyphen-width column into every ordinary word that merely carries a
+ *     soft-hyphen break hint, a real-text regression. It could not be changed
+ *     from this layer anyway: InputHandler.print() drops codepoint 173 with an
+ *     early `continue` before it ever asks a provider for a width. Both facts
+ *     point the same way, so the reference expectation is intentionally not met.
  *   U+200C ZERO WIDTH NON-JOINER and U+FEFF ZERO WIDTH NO-BREAK SPACE. Both
  *     already measure zero inside real text. Overriding them would be a no-op
  *     at best.
@@ -90,6 +120,19 @@ export const DEFAULT_OVERRIDES: Record<number, 0 | 1 | 2> = buildDefaults();
  * with width in two bits.
  */
 const CHAR_KIND_SHIFT = 3;
+
+/**
+ * The grapheme-break kind lives in the low nibble of the charKind field. The
+ * addon's own third-party tables use the same encoding; these mirror the two
+ * values the modifier join-gate needs so it does not have to import from the
+ * addon's private `third-party` module.
+ */
+const GRAPHEME_BREAK_MASK = 0xf;
+const GRAPHEME_BREAK_EXT_PIC = 11;
+
+/** The Fitzpatrick emoji modifiers, U+1F3FB through U+1F3FF. */
+const EMOJI_MODIFIER_LO = 0x1f3fb;
+const EMOJI_MODIFIER_HI = 0x1f3ff;
 
 export function packCharProperties(charKind: number, width: number, shouldJoin: boolean): number {
   return ((charKind & 0xffffff) << CHAR_KIND_SHIFT) | ((width & 3) << 1) | (shouldJoin ? 1 : 0);
@@ -139,8 +182,30 @@ export class OverrideProvider implements UnicodeProvider {
     this.delegate.ambiguousCharsAreWide = value;
   }
 
+  /**
+   * The preceding-state the delegate should segment against. Normally this is
+   * exactly what InputHandler passed. The one exception is a Fitzpatrick emoji
+   * modifier standing on a character that is not an emoji base: UAX #29 GB9
+   * would join it onto that character and absorb its width, but UTS #51 shows a
+   * base-less modifier as a standalone swatch, so it is segmented as if it began
+   * the line, which yields its own width-2, non-joining cluster. A modifier
+   * after an Extended_Pictographic base is left to join exactly as before, so no
+   * real skin-toned emoji is split. See the header block for the full argument.
+   */
+  private precedingFor(codepoint: number, preceding: number): number {
+    if (
+      codepoint >= EMOJI_MODIFIER_LO &&
+      codepoint <= EMOJI_MODIFIER_HI &&
+      preceding !== 0 &&
+      ((preceding >> CHAR_KIND_SHIFT) & GRAPHEME_BREAK_MASK) !== GRAPHEME_BREAK_EXT_PIC
+    ) {
+      return 0;
+    }
+    return preceding;
+  }
+
   charProperties(codepoint: number, preceding: number): number {
-    const value = this.delegate.charProperties(codepoint, preceding);
+    const value = this.delegate.charProperties(codepoint, this.precedingFor(codepoint, preceding));
     const override = this.overrides[codepoint];
     if (override === undefined) return value;
     // A width of 0 is joined onto whatever precedes it. The join is what

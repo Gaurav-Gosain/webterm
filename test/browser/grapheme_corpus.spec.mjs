@@ -71,7 +71,11 @@ const CORPUS = [
   { name: 'emoji-keycap', text: '1\u{fe0f}\u{20e3}', category: 'emoji-keycap', ghostty: 2, cell0: 2 },
   { name: 'emoji-keycap-no-vs', text: '1\u{20e3}', category: 'emoji-keycap', ghostty: 1, cell0: 1 },
 
-  // Skin tone modifiers
+  // Skin tone modifiers. A based modifier folds into one width-2 cluster. A lone
+  // modifier is width 2 at column 0 (asserted here) and, after a non-base
+  // character, is re-segmented into its own width-2 cluster rather than absorbed;
+  // that in-context case is pinned by its own test below since the corpus writes
+  // every cluster at column 0. See src/unicode.ts (the resegmentation note).
   { name: 'emoji-skin-tone', text: '\u{1f44d}\u{1f3fd}', category: 'emoji-skin-tone', ghostty: 2, cell0: 2 },
   { name: 'emoji-modifier-alone', text: '\u{1f3fd}', category: 'emoji-skin-tone', ghostty: 2, cell0: 2 },
 
@@ -114,6 +118,15 @@ const CORPUS = [
   { name: 'zero-width-space', text: 'a\u{200b}b', category: 'zero-width', ghostty: 2, cell0: 1 },
   { name: 'zero-width-space-alone', text: '\u{200b}', category: 'zero-width', ghostty: 0, xterm: 1, cell0: 0 },
   { name: 'zero-width-joiner-alone', text: '\u{200d}', category: 'zero-width', ghostty: 0, xterm: 1, cell0: 1 },
+  // U+00AD SOFT HYPHEN. General_Category Cf (Format): a conditional
+  // line-break/hyphenation hint, invisible unless a line breaks on it. A
+  // terminal never hyphenates, so it correctly contributes zero width (xterm and
+  // wcwidth agree). ghostty draws it as a visible width-1 glyph, which is the
+  // opinionated, less-correct choice and is left unmatched on purpose: making it
+  // visible would add a stray column to every ordinary word carrying a
+  // soft-hyphen break hint. InputHandler also drops codepoint 173 before any
+  // provider is asked, so this is doubly out of reach from the width layer. This
+  // is an intentional divergence, not a bug; see src/unicode.ts.
   { name: 'soft-hyphen', text: 'a\u{00ad}b', category: 'zero-width', ghostty: 3, xterm: 2, cell0: 1 },
 
   // Box drawing and block
@@ -367,6 +380,64 @@ test('the ZWSP override is what closes the gap, not the addon alone', async ({ p
 
   expect(result.withOverride).toBe(2);
   expect(result.withOverride).toBe(result.plain);
+});
+
+test('a base-less emoji modifier stands as its own cluster, a based one does not', async ({ page }) => {
+  // The corpus measures every cluster at column 0, where a lone Fitzpatrick
+  // modifier already advances two. The divergence the reference actually catches
+  // is one column to the right: a modifier written after a NON-base character
+  // (the `[` a reproducer wraps it in) is a grapheme Extend, so UAX #29 GB9 folds
+  // it onto that character and absorbs its width. UTS #51 instead shows a modifier
+  // with no emoji base as a standalone swatch, and the provider re-segments it so.
+  //
+  // This pins both halves and is written so a naive "never join a modifier" or a
+  // "always join a modifier" could not both pass: after `[` the modifier must
+  // stand alone (its own wide cell), and after a real base or a text-presentation
+  // base it must still fold into one width-two cluster.
+  await bootWithProvider(page);
+
+  const m = await page.evaluate(async () => {
+    const term = window.term.xterm;
+    const drain = () => new Promise((r) => term.write('', r));
+    const layout = async (text) => {
+      term.write('\x1b[H\x1b[2J\x1b[1;1H');
+      await drain();
+      term.write(text);
+      await drain();
+      const buf = term.buffer.active;
+      const line = buf.getLine(buf.baseY);
+      return {
+        cols: buf.cursorX,
+        // width of the cell the cluster lands in, per bracket position
+        cell1: line.getCell(1).getWidth(),
+        cell1chars: line.getCell(1).getChars(),
+      };
+    };
+    return {
+      // '[' + lone modifier + ']': the modifier is its own wide cell, four cols.
+      bracketModifier: await layout('[\u{1f3fd}]'),
+      // '[' + thumbs-up + modifier + ']': one width-two cluster, four cols.
+      bracketThumbMod: await layout('[\u{1f44d}\u{1f3fd}]'),
+      // '[' + index-pointing-up (text-presentation emoji base) + modifier + ']':
+      // the case the naive fix would have split; it must stay one cluster.
+      bracketPointMod: await layout('[\u{261d}\u{1f3fd}]'),
+    };
+  });
+
+  // Lone modifier after '[': a separate width-2 cell sitting after the bracket.
+  expect(m.bracketModifier.cols).toBe(4);
+  expect(m.bracketModifier.cell1).toBe(2);
+  expect(m.bracketModifier.cell1chars).toBe('\u{1f3fd}');
+
+  // Based modifier: folded into the base's one width-2 cluster, still four cols.
+  expect(m.bracketThumbMod.cols).toBe(4);
+  expect(m.bracketThumbMod.cell1).toBe(2);
+  expect([...m.bracketThumbMod.cell1chars].length).toBe(2);
+
+  // Text-presentation base + modifier: not split, one width-2 cluster.
+  expect(m.bracketPointMod.cols).toBe(4);
+  expect(m.bracketPointMod.cell1).toBe(2);
+  expect([...m.bracketPointMod.cell1chars].length).toBe(2);
 });
 
 test('the regional-indicator and matra overrides widen only what they should', async ({ page }) => {
