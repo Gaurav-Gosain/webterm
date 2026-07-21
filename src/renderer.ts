@@ -62,10 +62,38 @@ export class RendererManager {
   async install(): Promise<RendererKind> {
     const prefer = this.options.prefer;
     if (prefer === 'dom') return this.settle('dom');
-    if ((prefer === 'webgl' || prefer === 'auto') && (await this.tryWebgl())) return this.active;
-    if ((prefer === 'canvas' || prefer === 'auto' || prefer === 'webgl') && (await this.tryCanvas()))
+    // vtgl is opt-in only: 'auto' never reaches it, because it drops features
+    // the shipped renderers keep. When it is asked for and cannot start, fall
+    // through to xterm's own webgl, then canvas, then dom.
+    if (prefer === 'vtgl' && (await this.tryVtgl())) return this.active;
+    if ((prefer === 'webgl' || prefer === 'auto' || prefer === 'vtgl') && (await this.tryWebgl()))
+      return this.active;
+    if (
+      (prefer === 'canvas' || prefer === 'auto' || prefer === 'webgl' || prefer === 'vtgl') &&
+      (await this.tryCanvas())
+    )
       return this.active;
     return this.settle('dom');
+  }
+
+  private async tryVtgl(): Promise<boolean> {
+    if (!this.term.element) return false;
+    try {
+      const { VtglRendererAddon } = await import('./vtgl/adapter.js');
+      // The addon installs vtgl from inside activate(), which throws if neither
+      // WebGL2 nor Canvas2D will start. loadAddon runs activate synchronously
+      // here because the terminal is already open, so a failure surfaces as a
+      // throw and the terminal keeps its DOM renderer, leaving the fallback
+      // chain free to take over.
+      const addon = new VtglRendererAddon({ arabicShaping: true });
+      this.term.loadAddon(addon);
+      this.addon = addon;
+      this.settle('vtgl');
+      return true;
+    } catch (error) {
+      console.warn('webterm: vtgl renderer unavailable', error);
+      return false;
+    }
   }
 
   private async tryWebgl(): Promise<boolean> {
