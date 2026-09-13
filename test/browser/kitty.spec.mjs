@@ -17,6 +17,31 @@ function transmitAndPlace(id, width, height, colour, extra = '') {
   ].join('');
 }
 
+/** Two stacked bands, the top half `top` and the bottom half `bottom`. */
+function bandedRgba(width, height, top, bottom) {
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const [r, g, b] = y < height / 2 ? top : bottom;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      out[i] = r;
+      out[i + 1] = g;
+      out[i + 2] = b;
+      out[i + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/** Transmit a two-band image under `id` and place it at the cursor. */
+function transmitAndPlaceBanded(id, width, height, top, bottom, extra = '') {
+  const payload = toBase64(bandedRgba(width, height, top, bottom));
+  return [
+    apc(`a=t,f=32,i=${id},s=${width},v=${height},t=d`, payload),
+    apc(`a=p,i=${id}${extra ? `,${extra}` : ''}`),
+  ].join('');
+}
+
 /** Wait for the overlay to hold `count` placements, or fail with what it has. */
 async function waitForPlacements(page, count) {
   await page.waitForFunction(
@@ -600,6 +625,69 @@ test('scrolling up into scrollback and back returns the image to its row', async
   expect(result.scrolledUp.display).toBe('block');
   expect(result.scrolledUp.y).toBeGreaterThanOrEqual(0);
   expect(result.backDown).toBe(result.pushedAway);
+});
+
+test('a placement running off the bottom is cropped to the grid, not squashed into it', async ({
+  page,
+}) => {
+  // Scrolling back into history walks a placement down the viewport until it
+  // runs off the bottom. The rows that are left have to show the top of the
+  // image at the size it was placed at. Scaling the whole image into them
+  // instead squashes it, and the squash tightens with every scroll step, so an
+  // image shrinks as it leaves rather than being cut off by the edge.
+  //
+  // The image is red over blue and only three of its eight rows are on the
+  // grid, so a crop leaves the canvas entirely red and a squash pulls the blue
+  // half into it. Sampling near the bottom of the canvas is what tells them
+  // apart: the canvas geometry is identical either way.
+  await boot(page);
+  const cell = await cellBox(page);
+
+  const result = await page.evaluate(async (sequence) => {
+    const xterm = window.term.xterm;
+    const visibleRows = 3;
+
+    // Build scrollback, then place the image at the top of the viewport, so it
+    // sits far enough down the buffer to scroll back above it.
+    window.term.write('\r\n'.repeat(xterm.rows * 3));
+    await window.term.flush();
+    window.term.write('\x1b[H');
+    await window.term.flush();
+    const imageRow = xterm.buffer.active.baseY;
+    window.term.write(sequence);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Scroll back until only `visibleRows` of the placement are still on it.
+    xterm.scrollToLine(imageRow - (xterm.rows - visibleRows));
+    await new Promise((r) => setTimeout(r, 300));
+
+    const canvas = document.querySelector('.webterm-kitty-overlay canvas');
+    const ctx = canvas.getContext('2d');
+    const sample = (fraction) => {
+      const y = Math.min(canvas.height - 1, Math.floor(canvas.height * fraction));
+      const data = ctx.getImageData(Math.floor(canvas.width / 2), y, 1, 1).data;
+      return [data[0], data[1], data[2]];
+    };
+    return {
+      display: canvas.style.display,
+      cssHeight: parseFloat(canvas.style.height),
+      visibleRows,
+      near: sample(0.1),
+      far: sample(0.9),
+    };
+  }, transmitAndPlaceBanded(40, 64, 160, [255, 0, 0], [0, 0, 255], 'c=8,r=8'));
+
+  expect(result.display).toBe('block');
+  // The canvas covers the rows that are left, which both a crop and a squash
+  // get right. It is pinned here so the pixel assertions cannot pass by the
+  // canvas having quietly become some other size.
+  expect(result.cssHeight).toBeCloseTo(result.visibleRows * cell.height, 1);
+  // Both ends of it are the image's top band. The bottom band is off the grid.
+  expect(result.near[0]).toBeGreaterThan(200);
+  expect(result.near[2]).toBeLessThan(60);
+  expect(result.far[0]).toBeGreaterThan(200);
+  expect(result.far[2]).toBeLessThan(60);
 });
 
 test('a placement is dropped once its row falls out of the scrollback', async ({ page }) => {
