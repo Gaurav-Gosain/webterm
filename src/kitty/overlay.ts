@@ -894,18 +894,62 @@ export class KittyGraphics {
     this.virtualRuns = [];
   }
 
+  /**
+   * The part of a placement that is on the grid, in cells.
+   *
+   * A placement that runs past an edge is cropped to the grid rather than
+   * scaled into it. The cells an image covers are the cells it was placed on,
+   * so a placement half scrolled off the bottom shows its top half at the size
+   * it was placed at, the way it would in a native terminal. Scaling the whole
+   * image into the rows that are left instead squashes it, and the squash
+   * changes on every scroll step.
+   *
+   * `skipCols` and `skipRows` are what the crop took off the left and top,
+   * which is the same fraction to take off the source.
+   */
+  private visibleBox(p: Placement): {
+    left: number;
+    top: number;
+    cols: number;
+    rows: number;
+    skipCols: number;
+    skipRows: number;
+  } {
+    const screenRow = this.screenRow(p);
+    const left = Math.max(0, p.cellX);
+    const top = Math.max(0, screenRow);
+    const right = Math.min(this.term.cols, p.cellX + p.cols);
+    const bottom = Math.min(this.term.rows, screenRow + p.rows);
+    const cols = right - left;
+    const rows = bottom - top;
+    // Nothing of it is on the grid. Report where the placement actually is
+    // rather than where the clamp put it: the canvas is hidden either way, so
+    // the clamp buys nothing, and the real position is what says the placement
+    // travelled with its text instead of parking at the origin.
+    if (cols <= 0 || rows <= 0) {
+      return { left: p.cellX, top: screenRow, cols: 0, rows: 0, skipCols: 0, skipRows: 0 };
+    }
+    return { left, top, cols, rows, skipCols: left - p.cellX, skipRows: top - screenRow };
+  }
+
   private renderPlacement(p: Placement, img: StoredImage): void {
     const cell = this.cellPixels();
     const dpr = window.devicePixelRatio || 1;
-    // Clamp to the grid so an image does not overflow the terminal when it is
-    // resized smaller than the placement.
-    const screenRow = this.screenRow(p);
-    const maxCols = Math.max(1, this.term.cols - p.cellX);
-    const maxRows = Math.max(1, this.term.rows - Math.max(0, screenRow));
-    const cssW = Math.min(p.cols, maxCols) * cell.width;
-    const cssH = Math.min(p.rows, maxRows) * cell.height;
-
+    const box = this.visibleBox(p);
     const canvas = p.canvas;
+
+    // None of it is on the grid. positionPlacement hides the canvas; there is
+    // no reason to hold a backing store for it until it scrolls back.
+    if (box.cols <= 0 || box.rows <= 0) {
+      canvas.width = 1;
+      canvas.height = 1;
+      canvas.style.width = '0px';
+      canvas.style.height = '0px';
+      return;
+    }
+
+    const cssW = box.cols * cell.width;
+    const cssH = box.rows * cell.height;
     canvas.width = Math.max(1, Math.round(cssW * dpr));
     canvas.height = Math.max(1, Math.round(cssH * dpr));
     canvas.style.width = `${cssW}px`;
@@ -916,21 +960,37 @@ export class KittyGraphics {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
+
+    // The source rect is stretched over the placement's whole cell box, so the
+    // crop takes the same fraction off the source that it took off the cells.
     const src = clampSourceRect({ x: p.srcX, y: p.srcY, w: p.srcW, h: p.srcH }, img);
-    if (src.w > 0 && src.h > 0) {
-      ctx.drawImage(img.bitmap, src.x, src.y, src.w, src.h, 0, 0, cssW, cssH);
+    const perCol = src.w / Math.max(1, p.cols);
+    const perRow = src.h / Math.max(1, p.rows);
+    const view = clampSourceRect(
+      {
+        x: src.x + box.skipCols * perCol,
+        y: src.y + box.skipRows * perRow,
+        w: box.cols * perCol,
+        h: box.rows * perRow,
+      },
+      img,
+    );
+    if (view.w > 0 && view.h > 0) {
+      ctx.drawImage(img.bitmap, view.x, view.y, view.w, view.h, 0, 0, cssW, cssH);
     }
   }
 
   private positionPlacement(p: Placement): void {
     const cell = this.cellPixels();
-    const screenRow = this.screenRow(p);
-    p.canvas.style.transform = `translate(${p.cellX * cell.width}px, ${screenRow * cell.height}px)`;
+    const box = this.visibleBox(p);
+    // The canvas carries the visible crop, so it sits at the crop's top left
+    // rather than the placement's, which may be off the grid.
+    p.canvas.style.transform = `translate(${box.left * cell.width}px, ${box.top * cell.height}px)`;
     // A placement belongs to the screen it was made on. The alternate screen is
     // a separate buffer with its own coordinates, so a main-screen placement
     // must not be painted over a full-screen application, nor the reverse.
     const onThisScreen = p.alt === (this.term.buffer.active.type === 'alternate');
-    const visible = onThisScreen && screenRow + p.rows > 0 && screenRow < this.term.rows;
+    const visible = onThisScreen && box.cols > 0 && box.rows > 0;
     p.canvas.style.display = visible ? 'block' : 'none';
   }
 
