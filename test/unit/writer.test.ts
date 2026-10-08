@@ -130,3 +130,30 @@ test('a string is handed over without going through the batch', () => {
   writer.write('typed');
   assert.deepEqual(term.drain(), ['typed']);
 });
+
+test('a string written after queued bytes lands after them', () => {
+  // The defect: strings skipped the frame queue, so bytes written first were
+  // parsed after a string written second. `write(bytes('A')); write('B')`
+  // left "BA" on the screen.
+  const term = new DeferredTerminal();
+  const writer = writerOver(term);
+
+  writer.write(new TextEncoder().encode('A'));
+  writer.write('B');
+  writer.write(new TextEncoder().encode('C'));
+  writer.flushSync();
+
+  assert.deepEqual(term.drain(), ['A', 'B', 'C']);
+});
+
+test('a string flushes the queue once, and the frame that was scheduled does nothing', () => {
+  const term = new DeferredTerminal();
+  const writer = writerOver(term);
+
+  writer.write(new TextEncoder().encode('first'));
+  const scheduled = nextFrame;
+  assert.ok(frames.has(scheduled), 'bytes schedule a frame');
+  writer.write('second');
+  assert.ok(!frames.has(scheduled), 'the string flush cancels the pending frame');
+  assert.deepEqual(term.drain(), ['first', 'second']);
+});

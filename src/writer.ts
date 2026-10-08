@@ -36,7 +36,13 @@ export class BatchedWriter {
     this.onWrite?.();
     if (typeof data === 'string') {
       // Strings are handed to xterm directly: batching them would mean an
-      // encode and a decode for no gain.
+      // encode and a decode for no gain. Bytes still waiting for the frame
+      // arrived first, so they go first; otherwise a local notice written
+      // between two transport chunks lands ahead of output that preceded it.
+      if (this.pending.length > 0) {
+        if (this.scheduled) cancelAnimationFrame(this.frame);
+        this.flushSync();
+      }
       this.term.write(data);
       return;
     }
