@@ -51,7 +51,7 @@ term.attach({
 });
 ```
 
-Two combinators compose transports without touching this interface. `fallback(...transports)` takes the first that connects and reports which one through `name`. `reconnecting(factory, options)` retries with exponential backoff (`delayMs` 1000, `factor` 1.5, `maxDelayMs` 30000, `maxAttempts` 5) and calls the factory afresh each time, so a stateful transport is never reused after a close. Both are in [`src/transport/combinators.ts`](../src/transport/combinators.ts).
+Two combinators compose transports without touching this interface. `fallback(...transports)` takes the first that connects and reports which one through `name`. `reconnecting(factory, options)` retries with exponential backoff (`delayMs` 1000, `factor` 1.5, `maxDelayMs` 30000, `maxAttempts` 5) and calls the factory afresh each time, so a stateful transport is never reused after a close. Its `onOpen`, `onRetry` and `onGiveUp` options report each open, each scheduled retry and the end of the retries. Both are in [`src/transport/combinators.ts`](../src/transport/combinators.ts).
 
 ## Frame codecs
 

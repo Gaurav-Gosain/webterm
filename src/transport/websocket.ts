@@ -4,6 +4,16 @@ export interface WebSocketTransportOptions {
   protocols?: string | string[];
 }
 
+/** A WebSocket transport, with the live socket readable for inspection. */
+export interface WebSocketTransport extends Transport {
+  /**
+   * The socket of the current connection, or undefined before `start` and
+   * after `close`. For inspection and tests: a consumer that sends on it
+   * directly bypasses the transport.
+   */
+  readonly socket: WebSocket | undefined;
+}
+
 /**
  * A WebSocket carrying raw bytes. Message boundaries are the socket's own, so
  * no framing is imposed here.
@@ -11,12 +21,16 @@ export interface WebSocketTransportOptions {
 export function webSocketTransport(
   url: string | (() => string),
   options: WebSocketTransportOptions = {},
-): Transport {
+): WebSocketTransport {
   let socket: WebSocket | undefined;
   let closed = false;
 
   return {
     name: 'websocket',
+
+    get socket() {
+      return socket;
+    },
 
     start(sink: TransportSink) {
       return new Promise<void>((resolve, reject) => {

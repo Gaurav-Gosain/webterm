@@ -179,3 +179,37 @@ test('WebTransport reports a server close once', async () => {
     globals.WebTransport = saved;
   }
 });
+
+test('reconnecting reports each open, each retry and the give-up', async () => {
+  const { made, factory } = fakeFactory({ failStart: (i) => i >= 1 });
+  const events: string[] = [];
+  const transport = reconnecting(factory, {
+    delayMs: 10,
+    factor: 2,
+    maxAttempts: 2,
+    onOpen: (t) => events.push(`open ${t.name}`),
+    onRetry: (attempt, wait) => events.push(`retry ${attempt} ${wait}`),
+    onGiveUp: () => events.push('give up'),
+  });
+  const { sink } = recordingSink();
+  await transport.start(sink);
+  made[0]!.sink!.closed();
+  mock.timers.tick(10);
+  await settle();
+  mock.timers.tick(20);
+  await settle();
+  mock.timers.tick(1000);
+  await settle();
+  assert.deepEqual(events, ['open fake0', 'retry 1 10', 'retry 2 20', 'give up']);
+  assert.equal(made.length, 3);
+});
+
+test('reconnecting exposes the transport that is live', async () => {
+  const { made, factory } = fakeFactory();
+  const transport = reconnecting(factory, { delayMs: 10 });
+  assert.equal(transport.active, undefined);
+  await transport.start(recordingSink().sink);
+  assert.equal(transport.active, made[0]);
+  transport.close();
+  assert.equal(transport.active, undefined);
+});

@@ -667,9 +667,12 @@ export class WebTerm {
     this.transport = transport;
     const sink: TransportSink = {
       data: (bytes) => this.write(bytes),
-      closed: () => {
-        if (this.transport === transport) this.transport = undefined;
-      },
+      // The transport stays attached after it reports a close. reconnecting()
+      // reports each dropped connection and then opens a new one under the
+      // same object, so dropping it here left a reconnected session that
+      // showed output and sent no input. A send on a transport that is really
+      // closed does nothing.
+      closed: () => {},
     };
     void Promise.resolve(transport.start(sink)).catch((error) => {
       console.warn('webterm: transport failed to start', error);

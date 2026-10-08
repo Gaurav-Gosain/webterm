@@ -40,6 +40,16 @@ export const lengthPrefixCodec: FrameCodec = {
   },
 };
 
+/** A WebTransport transport, with the live stream writer readable for inspection. */
+export interface WebTransportTransport extends Transport {
+  /**
+   * The writer of the current stream, or undefined before the stream opens
+   * and after `close`. Every frame `send` puts on the wire goes through its
+   * `write`, already framed by the codec. For inspection and tests.
+   */
+  readonly writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+}
+
 export interface WebTransportOptions {
   /**
    * Resolved before connecting, for a self-signed certificate hash or any
@@ -60,7 +70,7 @@ export interface WebTransportOptions {
 export function webTransportTransport(
   url: string | (() => string),
   config: WebTransportOptions = {},
-): Transport {
+): WebTransportTransport {
   const codec = config.framing ?? lengthPrefixCodec;
   let transport: { close(): void; closed: Promise<unknown>; ready: Promise<unknown>; createBidirectionalStream(): Promise<{ readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> }> } | undefined;
   let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
@@ -100,6 +110,10 @@ export function webTransportTransport(
 
   return {
     name: 'webtransport',
+
+    get writer() {
+      return writer;
+    },
 
     async start(outer: TransportSink) {
       if (typeof WebTransport === 'undefined') throw new Error('WebTransport is not supported here');
