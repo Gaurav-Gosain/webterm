@@ -268,3 +268,37 @@ test('a terminal reset returns to legacy encoding', async ({ page }) => {
   await page.keyboard.press('a');
   expect(await data(page)).toBe('a');
 });
+
+// --- Input method composition ------------------------------------------------
+
+test('keys pressed while an input method is composing are left to xterm', async ({ page }) => {
+  // Playwright's keyboard cannot start a composition, so these events are
+  // dispatched on xterm's textarea by hand. The control arm proves the same
+  // synthetic route reaches the encoder when nothing is composing, so an empty
+  // result in the composing arm means the guard held, not that the event was
+  // lost on the way in.
+  await arm(page, '\x1b[>31u');
+
+  const sent = await page.evaluate(async () => {
+    const textarea = window.term.xterm.textarea;
+    const press = async (init) => {
+      window.clearData();
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+      textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, ...init }));
+      await new Promise((r) => setTimeout(r, 20));
+      return window.dataText();
+    };
+    return {
+      control: await press({ key: 'Enter', code: 'Enter' }),
+      enter: await press({ key: 'Enter', code: 'Enter', isComposing: true }),
+      escape: await press({ key: 'Escape', code: 'Escape', isComposing: true }),
+      letter: await press({ key: 'a', code: 'KeyA', isComposing: true }),
+      keyCode229: await press({ key: 'Enter', code: 'Enter', keyCode: 229 }),
+    };
+  });
+
+  expect(sent.control).toBe('\x1b[13u\x1b[13;1:3u');
+  for (const name of ['enter', 'escape', 'letter', 'keyCode229']) {
+    expect(sent[name], `${name} while composing`).not.toContain('\x1b[');
+  }
+});

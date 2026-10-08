@@ -44,6 +44,10 @@ export interface KeyInput {
   repeat?: boolean;
   /** `DOM_KEY_LOCATION_NUMPAD` is 3, which is how the keypad is identified. */
   location?: number;
+  /** True while an input method is composing. */
+  isComposing?: boolean;
+  /** 229 is the legacy marker for a key an input method is processing. */
+  keyCode?: number;
   getModifierState?(key: string): boolean;
 }
 
@@ -72,6 +76,11 @@ const CSI = '\x1b[';
  */
 const COMPOSITION_KEYS = new Set(['Dead', 'Process', 'Unidentified', 'Compose']);
 
+/** Whether an input method owns this event. */
+export function isComposing(event: Pick<KeyInput, 'isComposing' | 'keyCode'>): boolean {
+  return event.isComposing === true || event.keyCode === 229;
+}
+
 /** The codepoint of a string that holds exactly one. */
 function codepoint(text: string): number | undefined {
   const cp = text.codePointAt(0);
@@ -88,6 +97,10 @@ function codepoint(text: string): number | undefined {
 export function resolveKey(event: KeyInput): ResolvedKey | null {
   const { key, code } = event;
   if (!key || COMPOSITION_KEYS.has(key)) return null;
+  // WebKit, and Chromium on macOS, report real key names while an input
+  // method is composing. The Enter that commits a candidate arrives as
+  // `Enter`, so the key name alone cannot tell it from a submit.
+  if (isComposing(event)) return null;
 
   // Modifier keys first: they are identified by code because left and right
   // are separate keys in the protocol and share one `key` name.

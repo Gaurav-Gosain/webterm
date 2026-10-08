@@ -246,6 +246,27 @@ test('composition keys are never claimed', () => {
   }
 });
 
+test('a key pressed while an input method is composing is never encoded', () => {
+  // The Enter that commits a conversion, the Escape that cancels one and a
+  // letter typed into the candidate window all arrive with real key names on
+  // WebKit and on Chromium for macOS. Encoded, they submit or leave insert
+  // mode in the application while the user only picks a candidate.
+  const flags = DISAMBIGUATE | REPORT_EVENT_TYPES | REPORT_ALTERNATE_KEYS | REPORT_ALL_KEYS | REPORT_ASSOCIATED_TEXT;
+  const keys = [
+    key({ key: 'Enter', code: 'Enter', isComposing: true }),
+    key({ key: 'Escape', code: 'Escape', isComposing: true }),
+    key({ key: 'a', code: 'KeyA', isComposing: true }),
+    key({ key: 'Enter', code: 'Enter', keyCode: 229 }),
+    key({ key: 'a', code: 'KeyA', type: 'keyup', isComposing: true }),
+  ];
+  for (const event of keys) {
+    assert.equal(resolveKey(event), null, `${event.type} ${event.key} resolves to nothing`);
+    assert.equal(encodeKey(event, flags), null, `${event.type} ${event.key} encodes to nothing`);
+  }
+  // The same keys outside a composition are still encoded.
+  assert.equal(encodeKey(key({ key: 'Enter', code: 'Enter' }), flags), '\x1b[13u');
+});
+
 // --- The mode stack ----------------------------------------------------------
 
 test('push and pop restore the previous flags exactly', () => {

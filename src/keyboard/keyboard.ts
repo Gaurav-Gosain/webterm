@@ -13,7 +13,7 @@
  * dependency here to isolate or to break.
  */
 import type { Terminal } from '@xterm/xterm';
-import { encodeKey, type KeyInput } from './encoder.js';
+import { encodeKey, isComposing, type KeyInput } from './encoder.js';
 import {
   ALL_KEYBOARD_FLAGS,
   KeyboardFlags,
@@ -196,6 +196,10 @@ export class KittyKeyboard {
     }
 
     if (event.type === 'keydown') this.suppressKeypress = false;
+
+    // Every phase of a composing key, the release included, belongs to xterm's
+    // composition helper. Claiming even the keyup would starve it.
+    if (isComposing(event)) return true;
 
     const flags = this.stack.current;
     if (flags === KeyboardFlags.NONE) return true;
