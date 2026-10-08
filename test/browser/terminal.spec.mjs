@@ -336,3 +336,36 @@ test('disposing during open resolves the open and leaves nothing behind', async 
   }
   expect(errors).toEqual([]);
 });
+
+test('disposing during open loads no unicode addon into the disposed terminal', async ({ page }) => {
+  // The graphemes addon is a dynamic import. dispose() can run while it
+  // loads, and the open used to carry on and load it into the dead terminal.
+  const warnings = [];
+  page.on('console', (message) => {
+    if (message.type() === 'warning') warnings.push(message.text());
+  });
+  await boot(page);
+
+  const result = await page.evaluate(async () => {
+    const host = document.createElement('div');
+    host.className = 'webterm';
+    host.style.cssText = 'width:400px;height:200px';
+    document.body.appendChild(host);
+    let xterm = null;
+    let term;
+    term = new window.WebTermClass({
+      onTerminalCreated: (created) => {
+        xterm = created;
+        queueMicrotask(() => term.dispose());
+      },
+    });
+    await term.open(host);
+    await new Promise((r) => setTimeout(r, 200));
+    host.remove();
+    return { versions: xterm.unicode.versions, active: xterm.unicode.activeVersion };
+  });
+
+  expect(result.versions).toEqual(['6']);
+  expect(result.active).toBe('6');
+  expect(warnings.filter((w) => w.includes('unicode'))).toEqual([]);
+});

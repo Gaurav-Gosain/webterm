@@ -196,6 +196,8 @@ export class WebTerm {
     const overrides = this.options.unicode?.overrides ?? DEFAULT_OVERRIDES;
     try {
       const { UnicodeGraphemesAddon } = await import('@xterm/addon-unicode-graphemes');
+      // dispose() may have run while the addon loaded.
+      if (this.disposed) return;
       const addon = new UnicodeGraphemesAddon();
       const version = installUnicodeOverrides(term, addon, overrides);
       if (!version) {
