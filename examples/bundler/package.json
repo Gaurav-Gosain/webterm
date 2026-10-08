@@ -9,7 +9,7 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.12.0-beta.290",
     "@xterm/xterm": "^6.1.0-beta.290",
-    "webterm": "file:../.."
+    "@gaurav-gosain/webterm": "file:../.."
   },
   "devDependencies": {
     "typescript": "^5.7.2",

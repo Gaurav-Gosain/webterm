@@ -7,8 +7,9 @@ npm install
 npm run dev
 ```
 
-`webterm` here is a `file:` dependency on the repository root, so the example
-tracks the working tree. In a real project it is a version from npm.
+`@gaurav-gosain/webterm` here is a `file:` dependency on the repository root,
+so the example tracks the working tree. In a real project it is a version from
+npm. Keep the scope: the unscoped `webterm` on npm is a different project.
 
 `@xterm/xterm` and `@xterm/addon-fit` are peer dependencies and are listed here
 as ordinary dependencies, which is what a consumer does. Nothing else needs

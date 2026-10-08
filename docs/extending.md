@@ -170,8 +170,8 @@ term.xterm.registerMarker(0); // Public, after open.
 `createWindowChrome()` returns a frame whose `content` is an empty element. Nothing in [`src/chrome/`](../src/chrome/) imports the terminal, so the frame has no idea what goes in the slot:
 
 ```ts
-import { createWindowChrome } from 'webterm/chrome';
-import 'webterm/chrome.css';
+import { createWindowChrome } from '@gaurav-gosain/webterm/chrome';
+import '@gaurav-gosain/webterm/chrome.css';
 
 const chrome = createWindowChrome({ title: 'example.ts', background: 'noir', titleBar: true });
 chrome.mount(document.querySelector('#figure'));
@@ -190,7 +190,7 @@ So if the option surface is wrong for you, the orchestration file is the part to
 
 ```ts
 import { Terminal } from '@xterm/xterm';
-import { KittyGraphics, Clipboard } from 'webterm';
+import { KittyGraphics, Clipboard } from '@gaurav-gosain/webterm';
 
 const term = new Terminal({ allowProposedApi: true, lineHeight: 1 });
 term.open(container);

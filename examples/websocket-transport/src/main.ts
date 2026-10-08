@@ -4,12 +4,12 @@
 // nothing about framing, keepalives or message headers. A Transport is three
 // methods, and there are two ways to get one.
 
-import { WebTerm } from 'webterm';
-import type { Transport, TransportSink } from 'webterm';
-import { fallback, reconnecting, webSocketTransport, webTransportTransport } from 'webterm/transport';
+import { WebTerm } from '@gaurav-gosain/webterm';
+import type { Transport, TransportSink } from '@gaurav-gosain/webterm';
+import { fallback, reconnecting, webSocketTransport, webTransportTransport } from '@gaurav-gosain/webterm/transport';
 
 import '@xterm/xterm/css/xterm.css';
-import 'webterm/css';
+import '@gaurav-gosain/webterm/css';
 
 const host = document.getElementById('app');
 if (!host) throw new Error('no #app element');

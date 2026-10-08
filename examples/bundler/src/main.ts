@@ -5,15 +5,15 @@
 // web-links) stay behind dynamic imports that only load when an option asks for
 // them. Only @xterm/addon-fit is unconditional.
 
-import { WebTerm } from 'webterm';
-import type { ResizeEvent, WebTermOptions } from 'webterm';
-import { createWindowChrome } from 'webterm/chrome';
+import { WebTerm } from '@gaurav-gosain/webterm';
+import type { ResizeEvent, WebTermOptions } from '@gaurav-gosain/webterm';
+import { createWindowChrome } from '@gaurav-gosain/webterm/chrome';
 
 // xterm's own stylesheet is required and is yours to import, since you may
 // already have it. The other two belong to this package.
 import '@xterm/xterm/css/xterm.css';
-import 'webterm/css';
-import 'webterm/chrome.css';
+import '@gaurav-gosain/webterm/css';
+import '@gaurav-gosain/webterm/chrome.css';
 
 const options: WebTermOptions = {
   fontSize: 14,

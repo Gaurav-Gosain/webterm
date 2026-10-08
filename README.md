@@ -213,14 +213,15 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
 npm install /path/to/webterm @xterm/xterm @xterm/addon-fit
 ```
 
-The import specifier is still `webterm`, because that is the package name in
-`package.json`; only where it is installed from differs.
+The import specifier is `@gaurav-gosain/webterm`, the package name in
+`package.json`, wherever the package is installed from. The unscoped name
+`webterm` on npm is a different project.
 
 ```ts
 import { WebTerm } from '@gaurav-gosain/webterm';
 import { webSocketTransport } from '@gaurav-gosain/webterm/transport';
 import '@xterm/xterm/css/xterm.css';
-import 'webterm/css';
+import '@gaurav-gosain/webterm/css';
 
 const term = await new WebTerm({ fontSize: 14 }).open(document.body);
 term.attach(webSocketTransport('wss://example.com/pty'));
@@ -276,7 +277,7 @@ term.attach(
 
 ```ts
 import { createWindowChrome } from '@gaurav-gosain/webterm/chrome';
-import 'webterm/chrome.css';
+import '@gaurav-gosain/webterm/chrome.css';
 
 const chrome = createWindowChrome({
   title: 'zsh',
