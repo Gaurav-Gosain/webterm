@@ -24,6 +24,7 @@ import { KittyGraphics } from './kitty/overlay.js';
 import { withPlaceholderFont } from './kitty/placeholder-glyph.js';
 import { KittyKeyboard } from './keyboard/keyboard.js';
 import { RendererManager } from './renderer.js';
+import { BufferSearch } from './search.js';
 import {
   GEOMETRY_WINDOW_OPTIONS,
   installTerminalReports,
@@ -73,6 +74,12 @@ export class WebTerm {
   private fitTimer?: ReturnType<typeof setTimeout>;
   private resizeObserver?: ResizeObserver;
   private readonly teardown: Array<() => void> = [];
+
+  /**
+   * Find text in the buffer, select it and scroll to it. Plain text, never a
+   * pattern. Works before `open()` and finds nothing there.
+   */
+  readonly search = new BufferSearch(() => this.terminal);
 
   constructor(options: WebTermOptions = {}) {
     this.options = { ...options };

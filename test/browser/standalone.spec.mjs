@@ -9,7 +9,7 @@ import { expect, test } from '@playwright/test';
 import { ROOT } from '../port.mjs';
 import { boot } from './helpers.mjs';
 
-test('the standalone exposes the core and the transports', async ({ page }) => {
+test('the standalone exposes the core, the search and the transports', async ({ page }) => {
   await boot(page, '', 'standalone.html');
 
   const shape = await page.evaluate(() => {
@@ -22,6 +22,7 @@ test('the standalone exposes the core and the transports', async ({ page }) => {
       MAX_FRAME_BYTES: W.MAX_FRAME_BYTES,
       fallback: typeof W.fallback,
       reconnecting: typeof W.reconnecting,
+      BufferSearch: typeof W.BufferSearch,
       vtgl: 'vtgl' in W,
     };
   });
@@ -33,6 +34,7 @@ test('the standalone exposes the core and the transports', async ({ page }) => {
     MAX_FRAME_BYTES: 16 * 1024 * 1024,
     fallback: 'function',
     reconnecting: 'function',
+    BufferSearch: 'function',
     vtgl: false,
   });
 });

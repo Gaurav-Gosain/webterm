@@ -1,4 +1,10 @@
 export { WebTerm } from './webterm.js';
+export {
+  BufferSearch,
+  MAX_SEARCH_QUERY,
+  type SearchMatch,
+  type SearchOptions,
+} from './search.js';
 export { themes, resolveTheme, type ThemeName } from './themes.js';
 export { KittyGraphics, type KittyGraphicsOptions } from './kitty/overlay.js';
 export {
