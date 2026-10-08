@@ -17,6 +17,12 @@ export interface FrameCodec {
 
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
+/**
+ * How long a closed WebTransport session waits for its stream to end before
+ * the transport reports the close itself.
+ */
+const CLOSE_GRACE_MS = 1000;
+
 export const lengthPrefixCodec: FrameCodec = {
   encode(bytes) {
     const frame = new Uint8Array(4 + bytes.length);
@@ -142,13 +148,20 @@ export function webTransportTransport(
 
       const wt = new WebTransport(target, options as never) as unknown as NonNullable<typeof transport>;
       transport = wt;
+      // `closed` can settle before the read loop has drained the last bytes
+      // the server sent, and a close reported then drops them: sip lost its
+      // session-ended message that way and reconnected to a session the
+      // program had ended. Closing the session ends the stream, so the read
+      // loop reports the close once it has delivered everything. This is the
+      // fallback for a stream that does not end with its session.
+      const late = (error?: Error) => {
+        setTimeout(() => {
+          if (!shutdown) sink.closed(error);
+        }, CLOSE_GRACE_MS);
+      };
       wt.closed.then(
-        () => {
-          if (!shutdown) sink.closed();
-        },
-        (error: unknown) => {
-          if (!shutdown) sink.closed(error instanceof Error ? error : new Error(String(error)));
-        },
+        () => late(),
+        (error: unknown) => late(error instanceof Error ? error : new Error(String(error))),
       );
       await wt.ready;
 

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, mock, test } from 'node:test';
 
 import { reconnecting } from '../../src/transport/combinators.ts';
-import { webTransportTransport } from '../../src/transport/webtransport.ts';
+import { lengthPrefixCodec, webTransportTransport } from '../../src/transport/webtransport.ts';
 import type { Transport, TransportSink } from '../../src/types.ts';
 
 /** A transport the test drives by hand. */
@@ -274,6 +274,53 @@ test('WebTransport resolves its options before its url', async () => {
     await transport.start(recordingSink().sink);
     transport.close();
     assert.deepEqual(seen, ['https://advertised.invalid/wt']);
+  } finally {
+    globals.WebTransport = saved;
+  }
+});
+
+test('WebTransport delivers the last bytes before it reports a close', async () => {
+  // The session can report closed before the read loop has the stream's last
+  // chunk. Reporting the close then dropped that chunk, which for sip was the
+  // message that says the session ended.
+  let pushLast!: () => void;
+  let endSession!: () => void;
+  class EarlyCloseWebTransport {
+    ready = Promise.resolve();
+    closed = new Promise<void>((resolve) => {
+      endSession = resolve;
+    });
+    async createBidirectionalStream() {
+      return {
+        readable: new ReadableStream<Uint8Array>({
+          start(controller) {
+            pushLast = () => {
+              controller.enqueue(lengthPrefixCodec.encode(new TextEncoder().encode('bye')));
+              controller.close();
+            };
+          },
+        }),
+        writable: new WritableStream<Uint8Array>(),
+      };
+    }
+    close() {}
+  }
+  const globals = globalThis as unknown as { WebTransport?: unknown };
+  const saved = globals.WebTransport;
+  globals.WebTransport = EarlyCloseWebTransport;
+  mock.timers.reset();
+  try {
+    const events: string[] = [];
+    const transport = webTransportTransport('https://example.invalid/');
+    await transport.start({
+      data: (bytes) => events.push(`data ${new TextDecoder().decode(bytes)}`),
+      closed: () => events.push('closed'),
+    });
+    endSession();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    pushLast();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assert.deepEqual(events, ['data bye', 'closed']);
   } finally {
     globals.WebTransport = saved;
   }
