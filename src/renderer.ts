@@ -41,6 +41,12 @@ interface ContextLossAddon extends ITerminalAddon {
 export class RendererManager {
   private addon?: ITerminalAddon;
   private active: RendererKind = 'dom';
+  /**
+   * Set by dispose(). Each renderer is a dynamic import, and the terminal can
+   * be disposed while one is in flight. Loading an addon into a disposed
+   * terminal throws or leaks, so every step after an await checks this.
+   */
+  private disposed = false;
   private readonly term: Terminal;
   private readonly options: Required<RendererOptions>;
   private readonly onChange: (renderer: RendererKind) => void;
@@ -81,6 +87,8 @@ export class RendererManager {
     try {
       const { VtglRendererAddon } = await import('./vtgl/adapter.js');
       const vtgl = await import('vtgl');
+      // True ends the fallback chain: there is no terminal left to render.
+      if (this.disposed) return true;
       // The addon installs vtgl from inside activate(), which throws if neither
       // WebGL2 nor Canvas2D will start. loadAddon runs activate synchronously
       // here because the terminal is already open, so a failure surfaces as a
@@ -104,6 +112,7 @@ export class RendererManager {
           console.warn('webterm: HarfBuzz shaper failed to load, using presentation forms', e);
         }
       }
+      if (this.disposed) return true;
       const addon = new VtglRendererAddon(
         shaper
           ? { shaper, backend }
@@ -123,6 +132,8 @@ export class RendererManager {
     if (!this.term.element || !webglAvailable()) return false;
     try {
       const { WebglAddon } = await import('@xterm/addon-webgl');
+      // True ends the fallback chain: there is no terminal left to render.
+      if (this.disposed) return true;
       const addon = new WebglAddon() as unknown as ContextLossAddon;
       if (this.options.fallbackOnContextLoss) {
         addon.onContextLoss(() => {
@@ -155,6 +166,8 @@ export class RendererManager {
     if (!this.term.element) return false;
     try {
       const { CanvasAddon } = await import('@xterm/addon-canvas');
+      // True ends the fallback chain: there is no terminal left to render.
+      if (this.disposed) return true;
       const addon = new CanvasAddon();
       this.term.loadAddon(addon);
       this.addon = addon;
@@ -175,6 +188,7 @@ export class RendererManager {
   }
 
   dispose(): void {
+    this.disposed = true;
     try {
       this.addon?.dispose();
     } catch {

@@ -107,8 +107,16 @@ export class WebTerm {
     const term = new Terminal(this.terminalOptions());
     this.terminal = term;
     o.onTerminalCreated?.(term);
+    // dispose() can run during any await below, from onTerminalCreated or from
+    // a host that unmounts as fast as it mounted (React StrictMode, a tab that
+    // closes during the open). dispose() has already torn down the terminal
+    // and emptied the container by then, so carrying on would install into a
+    // dead terminal and leave a fresh .xterm element behind. Each check stops
+    // the open there instead.
+    if (this.disposed) return this;
 
     await this.installUnicode(term);
+    if (this.disposed) return this;
 
     this.fitAddon = new FitAddon();
     term.loadAddon(this.fitAddon);
@@ -118,8 +126,11 @@ export class WebTerm {
     this.writer = new BatchedWriter(term, () => this.syncOutput?.noteWrite());
 
     await this.installRenderer(term);
+    if (this.disposed) return this;
     await this.installGraphics(term, container);
+    if (this.disposed) return this;
     if (o.links) await this.installLinks(term);
+    if (this.disposed) return this;
 
     this.installReports(term);
     this.installClipboard(term, container);
@@ -239,6 +250,7 @@ export class WebTerm {
     if (graphics.sixel) {
       try {
         const { ImageAddon } = await import('@xterm/addon-image');
+        if (this.disposed) return;
         const addon = new ImageAddon({
           enableSizeReports: true,
           sixelSupport: true,
@@ -264,6 +276,7 @@ export class WebTerm {
   private async installLinks(term: Terminal): Promise<void> {
     try {
       const { WebLinksAddon } = await import('@xterm/addon-web-links');
+      if (this.disposed) return;
       const addon = new WebLinksAddon();
       term.loadAddon(addon);
       this.teardown.push(() => addon.dispose());

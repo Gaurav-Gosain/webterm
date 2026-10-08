@@ -271,3 +271,68 @@ test('a second open resolves to the same instance rather than a second terminal'
   expect(result.same).toBe(true);
   expect(result.screens).toBe(1);
 });
+
+test('disposing during open resolves the open and leaves nothing behind', async ({ page }) => {
+  // React StrictMode mounts, unmounts and mounts again inside one tick, and a
+  // tab can close while the terminal is still opening. Before the fix, open()
+  // carried on into the disposed terminal: it rejected with a TypeError and
+  // left a fresh .xterm element in the container.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await boot(page);
+
+  const results = await page.evaluate(async () => {
+    const WebTerm = window.WebTermClass;
+    // Each arm disposes at a different point of the open sequence.
+    const arms = {
+      microtask: (term) => ({ onTerminalCreated: () => queueMicrotask(() => term().dispose()) }),
+      task: (term) => ({ onTerminalCreated: () => setTimeout(() => term().dispose(), 0) }),
+      later: (term) => ({ onTerminalCreated: () => setTimeout(() => term().dispose(), 15) }),
+    };
+    const out = {};
+    for (const [name, arm] of Object.entries(arms)) {
+      const host = document.createElement('div');
+      host.className = 'webterm';
+      host.style.cssText = 'width:400px;height:200px';
+      document.body.appendChild(host);
+      let term;
+      term = new WebTerm({ ...arm(() => term), links: true });
+      let error = null;
+      let resolved = null;
+      try {
+        resolved = (await term.open(host)) === term;
+      } catch (e) {
+        error = String(e);
+      }
+      await new Promise((r) => setTimeout(r, 200));
+      out[name] = { error, resolved, children: host.childElementCount };
+      host.remove();
+    }
+
+    // Disposing from the renderer event lands between the renderer and the
+    // graphics install.
+    const host = document.createElement('div');
+    host.className = 'webterm';
+    host.style.cssText = 'width:400px;height:200px';
+    document.body.appendChild(host);
+    const term = new WebTerm({ links: true });
+    term.on('renderer', () => term.dispose());
+    let error = null;
+    try {
+      await term.open(host);
+    } catch (e) {
+      error = String(e);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    out.renderer = { error, resolved: true, children: host.childElementCount };
+    host.remove();
+    return out;
+  });
+
+  for (const [name, result] of Object.entries(results)) {
+    expect(result.error, `${name}: open() must not reject`).toBeNull();
+    expect(result.resolved, `${name}: open() resolves to the instance`).toBe(true);
+    expect(result.children, `${name}: the container is left empty`).toBe(0);
+  }
+  expect(errors).toEqual([]);
+});
