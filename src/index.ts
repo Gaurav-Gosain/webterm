@@ -72,6 +72,7 @@ export type {
   Transport,
   TransportSink,
   UnicodeOptions,
+  VtglProvider,
   WebTermEvents,
   WebTermOptions,
 } from './types.js';

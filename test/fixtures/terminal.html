@@ -34,7 +34,8 @@
           "@xterm/addon-canvas": "/node_modules/@xterm/addon-canvas/lib/xterm-addon-canvas.mjs",
           "@xterm/addon-image": "/node_modules/@xterm/addon-image/lib/addon-image.mjs",
           "@xterm/addon-web-links": "/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
-          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs"
+          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs",
+          "@gaurav-gosain/vtgl": "/node_modules/@gaurav-gosain/vtgl/dist/index.js"
         }
       }
     </script>
@@ -63,6 +64,12 @@
       // still show the pathology for the fixed arm to mean anything.
       if (params.has('syncTimeout')) {
         options.syncOutput = { timeoutMs: Number(params.get('syncTimeout')) };
+      }
+      // The vtgl renderer is a separate entry. ?vtgl=1 hands it in, the way a
+      // consumer that wants it does; without it, prefer=vtgl has to fall back.
+      if (params.get('vtgl') === '1') {
+        const { vtgl } = await import('/dist/vtgl/index.js');
+        options.renderer.vtgl = vtgl({ shaper: params.get('vtglShaper') ?? 'harfbuzz' });
       }
       if (params.get('cols') && params.get('rows')) {
         options.cols = Number(params.get('cols'));

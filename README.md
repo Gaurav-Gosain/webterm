@@ -6,7 +6,7 @@
 
 A small, embeddable browser terminal built on xterm.js.
 
-You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. Its one runtime dependency is vtgl, an optional renderer that loads only when `renderer.prefer` is `'vtgl'`. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is <!-- size:dist/index.js:gzip -->37.6 KB<!-- /size --> gzipped and nothing else is fetched by default.
+You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two required peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. It has no runtime dependency of its own. The optional vtgl renderer is a separate entry, `@gaurav-gosain/webterm/vtgl`, with `@gaurav-gosain/vtgl` as an optional peer dependency. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is <!-- size:dist/index.js:gzip -->37.5 KB<!-- /size --> gzipped and nothing else is fetched by default.
 
 It is built to be taken apart. Transports are a three-method interface the package never looks inside; the clipboard write path, the unicode width table and the renderer choice are each one option; the underlying `Terminal` is public as `term.xterm`; and the window chrome is a separate entry point that imports nothing from the terminal, so a page that wants a frame around a code block does not download an emulator to get one.
 
@@ -205,6 +205,8 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
 </html>
 ```
 
+The standalone build also carries the transports, under the same global: `WebTerm.webSocketTransport`, `WebTerm.webTransportTransport`, `WebTerm.lengthPrefixCodec`, `WebTerm.fallback` and `WebTerm.reconnecting`. A script-tag page does not have to write its own WebTransport, WebSocket fallback, framing or reconnect.
+
 `.webterm` on the container is the only class the package needs, and the container needs a size, since the grid is fitted to whatever it is. The stylesheet is small (<!-- size:dist/webterm.css:gzip:bytes -->574 bytes<!-- /size --> gzipped) and covers the container, the scrollbar and the graphics overlay; `@xterm/xterm/css/xterm.css` is still required and is your import, because you may already have it.
 
 ### From a bundler
@@ -327,7 +329,7 @@ Loads the fonts, constructs the `Terminal`, installs the providers and addons an
 | --- | --- | --- |
 | `cols` / `rows` | `number` | Zero before `open` |
 | `pixelSize` | `{ width, height }` | Rendered grid in CSS pixels, for a winsize report |
-| `renderer` | `'webgl' \| 'canvas' \| 'dom'` | The one actually running, after probing and any fallback |
+| `renderer` | `'vtgl' \| 'webgl' \| 'canvas' \| 'dom'` | The one actually running, after probing and any fallback |
 | `element` | `HTMLElement \| undefined` | xterm's element |
 | `xterm` | `Terminal` | The underlying xterm instance. Throws before `open` |
 | `kitty` | `KittyGraphics \| undefined` | The overlay, when enabled and supported |
@@ -356,7 +358,7 @@ Top level: `fontFamily`, `fontSize`, `fonts`, `lineHeight`, `theme`, `cursorBlin
 
 | Group | Keys and defaults |
 | --- | --- |
-| `renderer` | `prefer` (`'auto'`), `fallbackOnContextLoss` (`true`) |
+| `renderer` | `prefer` (`'auto'`), `fallbackOnContextLoss` (`true`), `vtgl` (none, see below) |
 | `clipboard` | `osc52` (`true`), `osc52Read` (`false`), `copyOnSelect` (`false`), `write` |
 | `unicode` | `provider` (`'graphemes'`), `overrides` (`DEFAULT_OVERRIDES`: U+200B to 0, the regional indicators and U+093F to 2) |
 | `graphics` | `kitty` (`true`), `sixel` (`false`) |
@@ -376,6 +378,18 @@ Every option carries its reasoning on the type, so an editor shows it without op
 - `fonts` exists because a CSS `@font-face` races the measurement: xterm measures the cell box once and caches whichever face has resolved by then.
 
 Four themes ship by name: `catppuccin-mocha` (the default), `catppuccin-latte`, `gruvbox-dark` and `nord`. Any `ITheme` can be passed instead; the named set is a convenience, not a constraint. A further 345 are available from a separate entry point, described below.
+
+### The vtgl renderer
+
+vtgl is an optional renderer with its own Arabic shaper. `prefer: 'auto'` never selects it, because it drops some features that the xterm renderers keep. It is a separate entry, so a page that does not use it does not download it. Give it to the terminal in `renderer.vtgl`:
+
+```ts
+import { vtgl } from '@gaurav-gosain/webterm/vtgl';
+
+new WebTerm({ renderer: { prefer: 'vtgl', vtgl: vtgl({ shaper: 'harfbuzz' }) } });
+```
+
+`vtgl()` takes `backend` (`'webgl2'` or `'canvas2d'`, default `'webgl2'`) and `shaper` (`'harfbuzz'`, `'forms'` or `'none'`, default `'harfbuzz'`). Install `@gaurav-gosain/vtgl` next to webterm to use this entry. On a script-tag page, load `webterm-vtgl.standalone.global.js` after the core standalone and pass `WebTermVtgl.vtgl()`. When `prefer` is `'vtgl'` and `renderer.vtgl` is not set, webterm writes a warning to the console and uses webgl, canvas or dom.
 
 `term.xterm` is public on purpose. No wrapper anticipates everything, and a consumer who needs `term.parser`, `term.registerMarker` or a third-party addon should not have to fork the package to get it.
 
@@ -404,7 +418,7 @@ for (const { id, name, appearance } of listThemes()) {
 
 An unknown id returns `undefined` rather than throwing or falling back, because a picker restoring a scheme from an old config needs to know the difference. Ids read from a config file or a URL are accepted as plain strings, and an id of `constructor` or `toString` misses like any other.
 
-It is a separate entry point because it is <!-- size:dist/themes/index.js:raw -->233.7 KB<!-- /size -->, <!-- size:dist/themes/index.js:gzip -->38.8 KB<!-- /size --> gzipped, against <!-- size:dist/index.js:raw -->125.9 KB<!-- /size --> for the terminal itself. A consumer who never imports it never downloads it, and the corpus adds nothing at all to `dist/index.js`, which builds byte for byte the same with it present and absent. Nothing in the main entry reaches for it, so nothing pulls it in by accident.
+It is a separate entry point because it is <!-- size:dist/themes/index.js:raw -->233.7 KB<!-- /size -->, <!-- size:dist/themes/index.js:gzip -->38.8 KB<!-- /size --> gzipped, against <!-- size:dist/index.js:raw -->125.5 KB<!-- /size --> for the terminal itself. A consumer who never imports it never downloads it, and the corpus adds nothing at all to `dist/index.js`, which builds byte for byte the same with it present and absent. Nothing in the main entry reaches for it, so nothing pulls it in by accident.
 
 Light and dark are computed rather than taken on trust. The background is gamma-decoded out of sRGB into a WCAG relative luminance and cut at 0.18, which is mid grey in linear light. Names are no guide: `Bright Lights`, `Thayer Bright` and `Tomorrow Night Bright` are all dark, `Tokyo Night Light` and `Night Owlish Light` are light. The upstream records do carry their own dark flag, and the computed classification agrees with all 345 of them, but it is hand-maintained metadata that a new scheme can arrive without, as thirteen of them arrive with no cursor colour.
 
@@ -605,17 +619,19 @@ Build output, measured on the tree at hand with tsup 8 targeting es2022. The sta
 <!-- sizes:begin -->
 | File | Raw | Gzip | What it is |
 | --- | --- | --- | --- |
-| `dist/index.js` | 125.9 KB | 37.6 KB | ESM core, xterm external |
+| `dist/index.js` | 125.5 KB | 37.5 KB | ESM core, xterm external |
 | `dist/transport/index.js` | 7.1 KB | 2.1 KB | Both transports and the combinators |
+| `dist/vtgl/index.js` | 17.4 KB | 5.0 KB | The vtgl renderer adapter, vtgl itself external |
 | `dist/chrome/index.js` | 13.0 KB | 3.9 KB | The window chrome |
 | `dist/themes/index.js` | 233.7 KB | 38.8 KB | The theme corpus, imported only if asked for |
 | `dist/webterm.css` | 1.3 KB | 0.6 KB | Container, scrollbar, overlay |
 | `dist/chrome.css` | 23.4 KB | 6.8 KB | The frame |
-| `dist/webterm.standalone.global.js` | 1814.4 KB | 615.5 KB | Everything inlined: xterm, all five addons and the vtgl renderer |
+| `dist/webterm.standalone.global.js` | 893.8 KB | 244.4 KB | Everything inlined for a script tag: xterm, all five addons and the transports |
+| `dist/webterm-vtgl.standalone.global.js` | 923.1 KB | 371.9 KB | The vtgl renderer for a script tag, with vtgl, its HarfBuzz wasm and font |
 | `dist/webterm-chrome.standalone.global.js` | 8.6 KB | 3.2 KB | The frame, for a script tag |
 <!-- sizes:end -->
 
-The standalone bundle is large because an IIFE cannot code-split, so every dynamic import is inlined, including `@xterm/addon-image` at 76 KB and the vtgl renderer with its HarfBuzz wasm and Arabic font, none of which the default options load. A bundler build does not pay that: the addons stay dynamic imports and only the ones the options ask for are fetched.
+The standalone bundle is large because an IIFE cannot code-split, so every dynamic import is inlined, including `@xterm/addon-image` at 76 KB, which the default options do not load. A bundler build does not pay that: the addons stay dynamic imports and only the ones the options ask for are fetched. The vtgl renderer is not in the standalone bundle. It has its own file, `webterm-vtgl.standalone.global.js`, which a page loads only when it wants vtgl. `npm run sizes:check` fails when the standalone bundle goes over 1,000,000 bytes.
 
 ## Tests
 
@@ -655,7 +671,7 @@ Every external thing the package touches sits behind one option or one small int
 - Carry the bytes yourself: implement `Transport` (three methods, no framing assumed).
 - Replace the clipboard write path: `clipboard.write` (one function).
 - Change the width policy: `unicode.overrides` (a codepoint-to-width map, `{}` to turn the layer off).
-- Pin or swap the renderer: `renderer.prefer` (one of `auto`, `webgl`, `canvas`, `dom`).
+- Pin or swap the renderer: `renderer.prefer` (one of `auto`, `webgl`, `canvas`, `dom`, or `vtgl` with `renderer.vtgl`).
 - Reach the emulator directly: `term.xterm`, or `onTerminalCreated(term)` to get it before `open`.
 - Override anything the wrapper decided: the `xterm` option is merged last (raw `ITerminalOptions`).
 - Frame something that is not a terminal: `createWindowChrome()`, then put whatever you like in `chrome.content`.

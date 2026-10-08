@@ -1,4 +1,4 @@
-import type { ITheme, Terminal } from '@xterm/xterm';
+import type { ITerminalAddon, ITheme, Terminal } from '@xterm/xterm';
 import type { ThemeName } from './themes.js';
 
 export type RendererKind = 'vtgl' | 'webgl' | 'canvas' | 'dom';
@@ -24,6 +24,22 @@ export interface RendererOptions {
   prefer?: 'auto' | RendererKind;
   /** Fall through to the next renderer on WebGL context loss. Default true. */
   fallbackOnContextLoss?: boolean;
+  /**
+   * The vtgl renderer, from `@gaurav-gosain/webterm/vtgl` (or the
+   * `WebTermVtgl` global of `webterm-vtgl.standalone.global.js`). It is a
+   * separate entry so that a page that never asks for vtgl never downloads it:
+   * vtgl and its HarfBuzz shaper are about 900 KB. `prefer: 'vtgl'` without
+   * this falls through to webgl, canvas and dom, with a console warning.
+   */
+  vtgl?: VtglProvider;
+}
+
+/**
+ * Builds the vtgl renderer addon. `vtgl()` from `@gaurav-gosain/webterm/vtgl`
+ * returns one.
+ */
+export interface VtglProvider {
+  createAddon(): Promise<ITerminalAddon>;
 }
 
 export interface SyncOutputOptions {

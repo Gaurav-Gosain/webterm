@@ -32,12 +32,15 @@ async function checkServedRoot(page) {
   servedRoot = root;
 }
 
-/** Load the fixture and wait until the terminal has finished opening. */
-export async function boot(page, query = '') {
+/**
+ * Load a fixture and wait until the terminal has finished opening. The default
+ * fixture drives the ESM build; `standalone.html` drives the script-tag build.
+ */
+export async function boot(page, query = '', fixture = 'terminal.html') {
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await checkServedRoot(page);
-  await page.goto(`/test/fixtures/terminal.html${query}`);
+  await page.goto(`/test/fixtures/${fixture}${query}`);
   await page.waitForFunction(() => window.ready === true, null, { timeout: 30_000 });
   if (errors.length) throw new Error(`the fixture threw during boot:\n${errors.join('\n')}`);
   return page;

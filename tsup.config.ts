@@ -11,6 +11,9 @@ export default defineConfig([
       index: 'src/index.ts',
       'transport/index': 'src/transport/index.ts',
       'chrome/index': 'src/chrome/index.ts',
+      // The vtgl renderer. Its own entry, so a consumer who never asks for it
+      // never bundles it; vtgl itself stays an external, optional peer.
+      'vtgl/index': 'src/vtgl/index.ts',
       // The colour scheme corpus is its own entry point because it is two
       // orders of magnitude larger than the code that uses it. A consumer who
       // never imports it never downloads it, and the main entry's size is
@@ -36,9 +39,11 @@ export default defineConfig([
     },
   },
   {
-    // The standalone build for script-tag users: xterm and every addon the
-    // default path can reach are inlined, so a plain HTML page needs one file.
-    entry: { 'webterm.standalone': 'src/index.ts' },
+    // The standalone build for script-tag users: xterm, every addon the
+    // default path can reach and the transports are inlined, so a plain HTML
+    // page needs one file. vtgl is not reachable from this entry, so it is not
+    // inlined; see the vtgl standalone below.
+    entry: { 'webterm.standalone': 'src/standalone.ts' },
     format: ['iife'],
     globalName: 'WebTerm',
     target: 'es2022',
@@ -48,6 +53,22 @@ export default defineConfig([
     clean: false,
     minify: true,
     noExternal: [/^@xterm\//],
+  },
+  {
+    // The vtgl renderer for script-tag users, loaded after the core standalone
+    // by a page that wants it. It publishes `WebTermVtgl`, and the page passes
+    // `WebTermVtgl.vtgl()` as `renderer.vtgl`. The adapter imports only xterm's
+    // types, so no second xterm is inlined here.
+    entry: { 'webterm-vtgl.standalone': 'src/vtgl/index.ts' },
+    format: ['iife'],
+    globalName: 'WebTermVtgl',
+    target: 'es2022',
+    platform: 'browser',
+    dts: false,
+    sourcemap: true,
+    clean: false,
+    minify: true,
+    noExternal: [/^@gaurav-gosain\/vtgl/],
   },
   {
     // The chrome standalone, separate from the terminal's so a script-tag user

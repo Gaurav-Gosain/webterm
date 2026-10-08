@@ -13,7 +13,7 @@
 // xterm's `baseY`, and vtgl's `viewportY` is xterm's `viewportY`.
 
 import type { IBufferCell, IBufferLine, Terminal } from '@xterm/xterm';
-import { CellFlags, type Cell, type CursorState, type LineView, type VtSource } from 'vtgl';
+import { CellFlags, type Cell, type CursorState, type LineView, type VtSource } from '@gaurav-gosain/vtgl';
 
 /** 0xRRGGBB for each of the 256 ANSI slots, plus the two defaults. */
 export interface Palette {

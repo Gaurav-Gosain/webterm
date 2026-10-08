@@ -216,6 +216,7 @@ export class WebTerm {
       {
         prefer: this.options.renderer?.prefer ?? 'auto',
         fallbackOnContextLoss: this.options.renderer?.fallbackOnContextLoss ?? true,
+        vtgl: this.options.renderer?.vtgl,
       },
       (renderer) => this.emitter.emit('renderer', renderer),
     );

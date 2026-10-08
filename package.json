@@ -24,6 +24,10 @@
       "types": "./dist/transport/index.d.ts",
       "import": "./dist/transport/index.js"
     },
+    "./vtgl": {
+      "types": "./dist/vtgl/index.d.ts",
+      "import": "./dist/vtgl/index.js"
+    },
     "./themes": {
       "types": "./dist/themes/index.d.ts",
       "import": "./dist/themes/index.js"
@@ -52,12 +56,16 @@
   },
   "peerDependencies": {
     "@xterm/addon-fit": ">=0.10.0",
-    "@xterm/xterm": "^5.5.0 || >=6.1.0-beta.0"
+    "@xterm/xterm": "^5.5.0 || >=6.1.0-beta.0",
+    "@gaurav-gosain/vtgl": ">=0.0.0"
   },
-  "dependencies": {
-    "vtgl": "file:../vtgl"
+  "peerDependenciesMeta": {
+    "@gaurav-gosain/vtgl": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@gaurav-gosain/vtgl": "file:../vtgl",
     "@playwright/test": "^1.61.1",
     "@types/node": "^22.10.0",
     "@xterm/addon-canvas": "0.8.0-beta.48",

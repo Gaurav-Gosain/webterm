@@ -27,16 +27,33 @@ const README = join(ROOT, 'README.md');
 const FILES = [
   ['dist/index.js', 'ESM core, xterm external'],
   ['dist/transport/index.js', 'Both transports and the combinators'],
+  ['dist/vtgl/index.js', 'The vtgl renderer adapter, vtgl itself external'],
   ['dist/chrome/index.js', 'The window chrome'],
   ['dist/themes/index.js', 'The theme corpus, imported only if asked for'],
   ['dist/webterm.css', 'Container, scrollbar, overlay'],
   ['dist/chrome.css', 'The frame'],
   [
     'dist/webterm.standalone.global.js',
-    'Everything inlined: xterm, all five addons and the vtgl renderer',
+    'Everything inlined for a script tag: xterm, all five addons and the transports',
+  ],
+  [
+    'dist/webterm-vtgl.standalone.global.js',
+    'The vtgl renderer for a script tag, with vtgl, its HarfBuzz wasm and font',
   ],
   ['dist/webterm-chrome.standalone.global.js', 'The frame, for a script tag'],
 ];
+
+/**
+ * Upper bounds in raw bytes, checked by --check.
+ *
+ * The standalone bundle is the one a script-tag page downloads before the
+ * terminal opens, and sip, tuios-web and the tuios Learn tour all ship it. It
+ * grew from 861 KB to 1,811 KB when vtgl was inlined into it without anyone
+ * noticing, so it carries a budget that the vtgl renderer alone would exceed.
+ */
+const BUDGETS = {
+  'dist/webterm.standalone.global.js': 1_000_000,
+};
 
 const cache = new Map();
 function measure(file) {
@@ -85,7 +102,13 @@ const check = process.argv.includes('--check');
 const current = readFileSync(README, 'utf8');
 const next = render(current);
 
+const over = Object.entries(BUDGETS).filter(([file, max]) => measure(file).raw > max);
+for (const [file, max] of over) {
+  console.error(`${file} is ${measure(file).raw} bytes, over its budget of ${max} bytes.`);
+}
+
 if (check) {
+  if (over.length) process.exit(1);
   if (next !== current) {
     const before = current.split('\n');
     const after = next.split('\n');

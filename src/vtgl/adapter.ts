@@ -58,7 +58,7 @@ import {
   type Renderer,
   type ShaperHook,
   type Theme,
-} from 'vtgl';
+} from '@gaurav-gosain/vtgl';
 
 import { XtermVtSource, type Palette } from './source.js';
 

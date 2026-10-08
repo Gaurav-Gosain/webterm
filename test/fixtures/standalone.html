@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webterm standalone fixture</title>
+    <link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/dist/webterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e2e;
+      }
+      #host {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      A script-tag page, the way sip, tuios-web and the tuios Learn tour load
+      webterm: the core standalone, then the vtgl standalone only when ?vtgl=1.
+      No import map and no module script, so nothing can resolve from
+      node_modules behind the bundle's back.
+    -->
+    <div id="host" class="webterm"></div>
+    <script src="/dist/webterm.standalone.global.js"></script>
+    <script>
+      (function () {
+        const params = new URLSearchParams(location.search);
+        const boot = () => {
+          const renderer = { prefer: params.get('renderer') || 'auto' };
+          if (window.WebTermVtgl) renderer.vtgl = window.WebTermVtgl.vtgl({ shaper: 'forms' });
+          const term = new window.WebTerm.WebTerm({ fontFamily: 'monospace', fontSize: 14, renderer });
+          window.term = term;
+          term.open(document.getElementById('host')).then(() => {
+            window.ready = true;
+          });
+        };
+        if (params.get('vtgl') === '1') {
+          const script = document.createElement('script');
+          script.src = '/dist/webterm-vtgl.standalone.global.js';
+          script.onload = boot;
+          document.body.appendChild(script);
+        } else {
+          boot();
+        }
+      })();
+    </script>
+  </body>
+</html>
