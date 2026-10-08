@@ -627,7 +627,7 @@ Build output, measured on the tree at hand with tsup 8 targeting es2022. The sta
 | File | Raw | Gzip | What it is |
 | --- | --- | --- | --- |
 | `dist/index.js` | 130.1 KB | 39.0 KB | ESM core, xterm external |
-| `dist/transport/index.js` | 7.7 KB | 2.2 KB | Both transports and the combinators |
+| `dist/transport/index.js` | 7.9 KB | 2.3 KB | Both transports and the combinators |
 | `dist/vtgl/index.js` | 17.4 KB | 5.0 KB | The vtgl renderer adapter, vtgl itself external |
 | `dist/chrome/index.js` | 13.0 KB | 3.9 KB | The window chrome |
 | `dist/themes/index.js` | 233.7 KB | 38.8 KB | The theme corpus, imported only if asked for |

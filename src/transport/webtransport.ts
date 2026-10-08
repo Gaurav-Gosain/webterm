@@ -53,7 +53,8 @@ export interface WebTransportTransport extends Transport {
 export interface WebTransportOptions {
   /**
    * Resolved before connecting, for a self-signed certificate hash or any
-   * other option the WebTransport constructor takes.
+   * other option the WebTransport constructor takes. It runs before a `url`
+   * function, so it can also record the endpoint the server advertises.
    */
   options?: () => Promise<Record<string, unknown>>;
   framing?: FrameCodec;
@@ -118,18 +119,26 @@ export function webTransportTransport(
     async start(outer: TransportSink) {
       if (typeof WebTransport === 'undefined') throw new Error('WebTransport is not supported here');
       // The read loop and `wt.closed` both observe the end of the session, and
-      // a server-initiated close reaches both. Report it once.
+      // a server-initiated close reaches both. Report it once, and only for a
+      // session that opened: a failed handshake settles `closed` too, and
+      // that failure is the rejection of start(). Reporting it as well made
+      // reconnecting() schedule a retry while fallback() was still moving on
+      // to the next transport, so a page that fell back to WebSocket opened a
+      // second connection a second later.
       let reported = false;
+      let open = false;
       const sink: TransportSink = {
         data: (bytes) => outer.data(bytes),
         closed: (error) => {
-          if (reported) return;
+          if (reported || !open) return;
           reported = true;
           outer.closed(error);
         },
       };
-      const target = typeof url === 'function' ? url() : url;
+      // The options first: a server can advertise its endpoint in the same
+      // response that carries its certificate hash, and url() can read it.
       const options = config.options ? await config.options() : {};
+      const target = typeof url === 'function' ? url() : url;
 
       const wt = new WebTransport(target, options as never) as unknown as NonNullable<typeof transport>;
       transport = wt;
@@ -146,6 +155,7 @@ export function webTransportTransport(
       const stream = await wt.createBidirectionalStream();
       writer = stream.writable.getWriter();
       reader = stream.readable.getReader();
+      open = true;
       void readLoop(sink);
     },
 

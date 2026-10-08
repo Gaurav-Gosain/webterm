@@ -213,3 +213,68 @@ test('reconnecting exposes the transport that is live', async () => {
   transport.close();
   assert.equal(transport.active, undefined);
 });
+
+test('a WebTransport handshake that fails is a rejected start, never a close', async () => {
+  // A refused handshake rejects `ready` and `closed` together. The close
+  // handler is registered first, so it used to run first and report a close
+  // for a session that never opened. Under fallback() inside reconnecting()
+  // that scheduled a retry while the fallback went on to WebSocket.
+  class RefusedWebTransport {
+    closed: Promise<void>;
+    ready: Promise<void>;
+    constructor() {
+      const failure = new Error('handshake refused');
+      this.closed = Promise.reject(failure);
+      this.ready = Promise.reject(failure);
+    }
+    async createBidirectionalStream(): Promise<never> {
+      throw new Error('unreachable');
+    }
+    close() {}
+  }
+  const globals = globalThis as unknown as { WebTransport?: unknown };
+  const saved = globals.WebTransport;
+  globals.WebTransport = RefusedWebTransport;
+  mock.timers.reset();
+  try {
+    const { record, sink } = recordingSink();
+    const transport = webTransportTransport('https://example.invalid/');
+    await assert.rejects(Promise.resolve(transport.start(sink)), /handshake refused/);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(record.closed, 0);
+  } finally {
+    globals.WebTransport = saved;
+  }
+});
+
+test('WebTransport resolves its options before its url', async () => {
+  const seen: string[] = [];
+  class OpenWebTransport {
+    ready = Promise.resolve();
+    closed = new Promise<void>(() => {});
+    constructor(url: string) {
+      seen.push(url);
+    }
+    async createBidirectionalStream() {
+      return { readable: new ReadableStream<Uint8Array>(), writable: new WritableStream<Uint8Array>() };
+    }
+    close() {}
+  }
+  const globals = globalThis as unknown as { WebTransport?: unknown };
+  const saved = globals.WebTransport;
+  globals.WebTransport = OpenWebTransport;
+  try {
+    let advertised = 'https://guess.invalid/';
+    const transport = webTransportTransport(() => advertised, {
+      options: async () => {
+        advertised = 'https://advertised.invalid/wt';
+        return {};
+      },
+    });
+    await transport.start(recordingSink().sink);
+    transport.close();
+    assert.deepEqual(seen, ['https://advertised.invalid/wt']);
+  } finally {
+    globals.WebTransport = saved;
+  }
+});

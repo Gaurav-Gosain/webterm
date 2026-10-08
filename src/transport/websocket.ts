@@ -36,10 +36,14 @@ export function webSocketTransport(
       return new Promise<void>((resolve, reject) => {
         const target = typeof url === 'function' ? url() : url;
         const ws = new WebSocket(target, options.protocols);
+        let opened = false;
         socket = ws;
         ws.binaryType = 'arraybuffer';
 
-        ws.onopen = () => resolve();
+        ws.onopen = () => {
+          opened = true;
+          resolve();
+        };
         ws.onmessage = (event: MessageEvent) => {
           if (event.data instanceof ArrayBuffer) sink.data(new Uint8Array(event.data));
           else if (typeof event.data === 'string') sink.data(new TextEncoder().encode(event.data));
@@ -50,7 +54,9 @@ export function webSocketTransport(
           if (ws.readyState !== WebSocket.OPEN) reject(new Error(`websocket failed to open: ${target}`));
         };
         ws.onclose = (event: CloseEvent) => {
-          if (closed) return;
+          // A socket that never opened reports its failure through the
+          // rejection above, not as a close.
+          if (closed || !opened) return;
           sink.closed(event.wasClean ? undefined : new Error(`websocket closed: ${event.code}`));
         };
       });
