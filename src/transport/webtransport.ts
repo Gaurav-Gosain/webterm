@@ -83,6 +83,9 @@ export function webTransportTransport(
   let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let shutdown = false;
+  // Set once the session has ended, from either side. A write after that
+  // goes to an errored stream and rejects, so send() drops it instead.
+  let ended = false;
 
   async function readLoop(sink: TransportSink): Promise<void> {
     let buffer = new Uint8Array(64 * 1024);
@@ -136,6 +139,7 @@ export function webTransportTransport(
       const sink: TransportSink = {
         data: (bytes) => outer.data(bytes),
         closed: (error) => {
+          if (open) ended = true;
           if (reported || !open) return;
           reported = true;
           outer.closed(error);
@@ -149,11 +153,10 @@ export function webTransportTransport(
       const wt = new WebTransport(target, options as never) as unknown as NonNullable<typeof transport>;
       transport = wt;
       // `closed` can settle before the read loop has drained the last bytes
-      // the server sent, and a close reported then drops them: sip lost its
-      // session-ended message that way and reconnected to a session the
-      // program had ended. Closing the session ends the stream, so the read
-      // loop reports the close once it has delivered everything. This is the
-      // fallback for a stream that does not end with its session.
+      // the server sent, and a close reported then drops them. Closing the
+      // session ends the stream, so the read loop reports the close once it
+      // has delivered everything. This is the fallback for a stream that does
+      // not end with its session.
       const late = (error?: Error) => {
         setTimeout(() => {
           if (!shutdown) sink.closed(error);
@@ -173,8 +176,16 @@ export function webTransportTransport(
     },
 
     async send(bytes: Uint8Array) {
-      if (!writer) return;
-      await writer.write(codec.encode(bytes));
+      // After the session ends, a keystroke has nowhere to go. Writing it to
+      // the dead stream rejected, and a caller that does not await send(), as
+      // WebTerm does not, got an unhandled rejection per keystroke.
+      if (!writer || ended || shutdown) return;
+      try {
+        await writer.write(codec.encode(bytes));
+      } catch {
+        // The stream ended between the check and the write.
+        ended = true;
+      }
     },
 
     close() {

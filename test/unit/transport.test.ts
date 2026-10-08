@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, mock, test } from 'node:test';
 
 import { reconnecting } from '../../src/transport/combinators.ts';
+import { webSocketTransport } from '../../src/transport/websocket.ts';
 import { lengthPrefixCodec, webTransportTransport } from '../../src/transport/webtransport.ts';
 import type { Transport, TransportSink } from '../../src/types.ts';
 
@@ -240,7 +241,9 @@ test('a WebTransport handshake that fails is a rejected start, never a close', a
     const { record, sink } = recordingSink();
     const transport = webTransportTransport('https://example.invalid/');
     await assert.rejects(Promise.resolve(transport.start(sink)), /handshake refused/);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Past CLOSE_GRACE_MS (1 s), so a close reported from the settled
+    // `closed` promise would have arrived by now.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.equal(record.closed, 0);
   } finally {
     globals.WebTransport = saved;
@@ -323,5 +326,89 @@ test('WebTransport delivers the last bytes before it reports a close', async () 
     assert.deepEqual(events, ['data bye', 'closed']);
   } finally {
     globals.WebTransport = saved;
+  }
+});
+
+test('WebTransport drops a send after the server closes, without a rejection', async () => {
+  // A page that calls send() without awaiting it, as WebTerm does on every
+  // keystroke, got an unhandled rejection per key once the stream was dead.
+  let endStream!: () => void;
+  let writes = 0;
+  class ClosingWebTransport {
+    ready = Promise.resolve();
+    closed = new Promise<void>(() => {});
+    async createBidirectionalStream() {
+      return {
+        readable: new ReadableStream<Uint8Array>({
+          start(controller) {
+            endStream = () => controller.close();
+          },
+        }),
+        writable: new WritableStream<Uint8Array>({
+          write() {
+            writes++;
+            if (ended) throw new Error('stream is closed');
+          },
+        }),
+      };
+    }
+    close() {}
+  }
+  let ended = false;
+  const globals = globalThis as unknown as { WebTransport?: unknown };
+  const saved = globals.WebTransport;
+  globals.WebTransport = ClosingWebTransport;
+  mock.timers.reset();
+  try {
+    const { record, sink } = recordingSink();
+    const transport = webTransportTransport('https://example.invalid/');
+    await transport.start(sink);
+    await transport.send(new Uint8Array([0x61]));
+    assert.equal(writes, 1);
+
+    ended = true;
+    endStream();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(record.closed, 1);
+
+    for (let i = 0; i < 3; i++) await transport.send(new Uint8Array([0x62]));
+    assert.equal(writes, 1, 'a send after the close still reached the dead stream');
+  } finally {
+    globals.WebTransport = saved;
+  }
+});
+
+test('a WebSocket that never opens is a rejected start, never a close', async () => {
+  // A refused socket fires error and then close. The error rejects start();
+  // reporting the close as well tells reconnecting() a live connection ended,
+  // and it schedules a retry next to the one its caller schedules.
+  class RefusedWebSocket {
+    static OPEN = 1;
+    readyState = 3;
+    binaryType = 'blob';
+    onopen?: () => void;
+    onerror?: () => void;
+    onclose?: (event: { wasClean: boolean; code: number }) => void;
+    constructor() {
+      setTimeout(() => {
+        this.onerror?.();
+        setTimeout(() => this.onclose?.({ wasClean: false, code: 1006 }), 0);
+      }, 0);
+    }
+    send() {}
+    close() {}
+  }
+  const globals = globalThis as unknown as { WebSocket?: unknown };
+  const saved = globals.WebSocket;
+  globals.WebSocket = RefusedWebSocket;
+  mock.timers.reset();
+  try {
+    const { record, sink } = recordingSink();
+    const transport = webSocketTransport('ws://example.invalid/');
+    await assert.rejects(Promise.resolve(transport.start(sink)), /failed to open/);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(record.closed, 0);
+  } finally {
+    globals.WebSocket = saved;
   }
 });
