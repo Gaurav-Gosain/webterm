@@ -934,6 +934,85 @@ test('a deflate bomb is cut off at the size the image declared', async ({ page }
   const payload = toBase64(deflateSync(Buffer.alloc(64 * 1024 * 1024)));
   const result = await sendAndSettle(page, apc('a=t,f=32,o=z,i=41,s=16,v=16,t=d', payload));
   expect(result.images).toBe(0);
+  // The reply waits for the decode, so the refusal is what the client hears.
+  expect(result.replies).toContain('\x1b_Gi=41;EFBIG:');
+  expect(result.replies).not.toContain('OK');
+});
+
+test('f=100 data that is not a PNG is refused before decoding', async ({ page }) => {
+  await boot(page);
+  // A 35-byte GIF that declares an 8192x8192 canvas. The browser decodes by
+  // content, so without a PNG check it stored a 256 MiB bitmap.
+  const gif = Buffer.from([
+    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x20, 0x00, 0x20, 0x80, 0x00, 0x00, 0, 0, 0, 255, 255,
+    255, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b,
+  ]);
+  const result = await sendAndSettle(page, apc('a=t,f=100,i=44,t=d', toBase64(gif)));
+  expect(result.replies).toContain('\x1b_Gi=44;EBADPNG:');
+  expect(result.replies).not.toContain('OK');
+  expect(result.images).toBe(0);
+});
+
+test('a PNG whose header declares more pixels than the cap gets EFBIG and no OK', async ({ page }) => {
+  await boot(page);
+  // Only the signature and an IHDR that declares 8192x8192.
+  const png = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+  png.writeUInt32BE(13, 8);
+  png.write('IHDR', 12);
+  png.writeUInt32BE(8192, 16);
+  png.writeUInt32BE(8192, 20);
+  const result = await sendAndSettle(page, apc('a=t,f=100,i=45,t=d', toBase64(png)));
+  expect(result.replies).toContain('\x1b_Gi=45;EFBIG:');
+  expect(result.replies).not.toContain('OK');
+  expect(result.images).toBe(0);
+});
+
+test('open transmissions share one byte quota and a count limit', async ({ page }) => {
+  // An 8x8 cap allows about 88 K base64 characters for one transmission.
+  // 100 open transmissions of 80 K each held 8 M characters before the quota.
+  await boot(page, '?kittyMaxPixels=64');
+  const chunk = 'A'.repeat(80_000);
+  let sequence = '';
+  for (let id = 100; id < 200; id++) sequence += apc(`a=t,f=100,i=${id},m=1,t=d`, chunk);
+  await sendAndSettle(page, sequence);
+  const open = await page.evaluate(() => {
+    const pending = [...window.term.kitty.pending.values()];
+    return {
+      count: pending.length,
+      held: pending.reduce((sum, e) => sum + e.chunks.reduce((n, c) => n + c.length, 0), 0),
+    };
+  });
+  expect(open.count).toBeLessThanOrEqual(16);
+  expect(open.held).toBeLessThanOrEqual(88_000);
+
+  // An older transmission lost its data to the newest one, and says so.
+  const finished = await sendAndSettle(page, apc('i=198,m=0'));
+  expect(finished.replies).toContain('\x1b_Gi=198;EFBIG:too much image data in flight');
+
+  // The terminal still takes an image that fits.
+  const after = await sendAndSettle(page, transmitAndPlace(300, 8, 8, [255, 0, 0]));
+  expect(after.replies).toContain('\x1b_Gi=300;OK');
+  expect(after.images).toBe(1);
+});
+
+test('an image sent with the quota full of placed images is still placed', async ({ page }) => {
+  // Room for two 16x16 RGBA images, both placed. The third used to be the
+  // only eviction candidate, so it was dropped before its a=T placement.
+  await boot(page, `?kittyStorageBytes=${2 * 16 * 16 * 4}`);
+  const solid = toBase64(solidRgba(16, 16, [0, 200, 0]));
+  await sendAndSettle(
+    page,
+    apc('a=T,f=32,i=60,s=16,v=16,t=d', solid) + apc('a=T,f=32,i=61,s=16,v=16,t=d', solid),
+  );
+  await waitForPlacements(page, 2);
+  const third = await sendAndSettle(page, apc('a=T,f=32,i=62,s=16,v=16,t=d', solid));
+  expect(third.replies).toContain('\x1b_Gi=62;OK');
+  await waitForPlacements(page, 3);
+  const placed = await page.evaluate(() =>
+    [...window.term.kitty.placements.values()].map((p) => p.imageId).sort(),
+  );
+  expect(placed).toEqual([60, 61, 62]);
 });
 
 test('a transmission longer than the largest allowed image is dropped', async ({ page }) => {

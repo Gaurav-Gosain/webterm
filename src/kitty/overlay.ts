@@ -49,8 +49,10 @@ import type { IMarker, Terminal } from '@xterm/xterm';
 import type { KittyOptions } from '../types.js';
 import {
   base64Decode,
+  BadPngError,
   base64Length,
   checkImageSize,
+  decodeErrorReply,
   DEFAULT_MAX_IMAGE_PIXELS,
   DEFAULT_STORAGE_BYTES,
   clampSourceRect,
@@ -92,9 +94,20 @@ interface PendingTransmit {
   chunks: string[];
   /** Base64 characters received so far. */
   length: number;
-  /** Set once the transmission passed the size cap; later chunks are dropped. */
-  tooLarge: boolean;
+  /** Base64 characters held in `chunks`, counted against the shared quota. */
+  held: number;
+  /**
+   * Why the transmission was refused, once it was. Its later chunks are
+   * dropped, and its last one is answered EFBIG with this reason.
+   */
+  refused: string | null;
 }
+
+/**
+ * The most chunked transmissions that may be open at once. kitty itself
+ * loads one at a time; a sender that opens more than this loses the oldest.
+ */
+const MAX_OPEN_TRANSMISSIONS = 16;
 
 interface StoredImage {
   bitmap: ImageBitmap;
@@ -209,6 +222,8 @@ export class KittyGraphics {
   private readonly placements = new Map<string, Placement>();
   /** Chunked transmissions in progress, keyed by image id. */
   private readonly pending = new Map<string, PendingTransmit>();
+  /** Base64 characters held by every open transmission together. */
+  private pendingChars = 0;
   /** The placement an a=T stream will apply once its transmit phase finishes. */
   private readonly pendingPlacement = new Map<string, PlaceSpec>();
   /**
@@ -355,6 +370,7 @@ export class KittyGraphics {
     this.clearVirtual();
     this.pixelSizes.clear();
     this.pending.clear();
+    this.pendingChars = 0;
     this.pendingPlacement.clear();
     this.deferredPlacements.clear();
   }
@@ -524,7 +540,8 @@ export class KittyGraphics {
     this.lastTransmitKey = key;
     let entry = this.pending.get(key);
     if (!entry) {
-      entry = { params: { ...cmd }, chunks: [], length: 0, tooLarge: false };
+      this.dropOldestTransmissions(MAX_OPEN_TRANSMISSIONS - 1);
+      entry = { params: { ...cmd }, chunks: [], length: 0, held: 0, refused: null };
       this.pending.set(key, entry);
       if (andPlace) {
         // The first chunk of an a=T stream carries the placement parameters.
@@ -543,15 +560,18 @@ export class KittyGraphics {
       }
     }
 
-    if (payload && !entry.tooLarge) {
+    if (payload && !entry.refused) {
       entry.length += payload.length;
       if (entry.length > this.maxTransmitChars) {
-        // Keep the entry so the chunks still to come land on it and are
-        // dropped, instead of starting a new image. Free what it holds.
-        entry.tooLarge = true;
-        entry.chunks = [];
+        this.refuseTransmit(entry, `more than ${this.maxTransmitChars} bytes of data`);
       } else {
         entry.chunks.push(payload);
+        entry.held += payload.length;
+        this.pendingChars += payload.length;
+        // Every open transmission together may hold no more than the largest
+        // single one. Without this, a sender opens many and fills each to
+        // just under the cap.
+        this.limitPendingChars(entry);
       }
     }
     // m=1 means more chunks follow.
@@ -559,6 +579,7 @@ export class KittyGraphics {
 
     const params = entry.params;
     this.pending.delete(key);
+    this.pendingChars -= entry.held;
     const placementSpec = this.pendingPlacement.get(key);
     this.pendingPlacement.delete(key);
 
@@ -569,17 +590,14 @@ export class KittyGraphics {
     // its size in s and v, and a PNG's own header is checked after base64.
     const declared =
       params.s || params.v ? checkImageSize(params.s ?? 0, params.v ?? 0, this.maxImagePixels) : null;
-    if (entry.tooLarge || declared) {
-      const reason = entry.tooLarge ? `more than ${this.maxTransmitChars} bytes of data` : declared;
-      this.sendResponse({ ...params, i: params.i, I: params.I }, `EFBIG:${reason}`, imageId);
-      console.warn(`webterm: kitty image ${imageId} refused, ${reason}`);
+    const reply: KittyCommand = { ...params, i: params.i, I: params.I };
+    const refused = entry.refused ?? declared;
+    if (refused) {
+      this.sendResponse(reply, `EFBIG:${refused}`, imageId);
+      console.warn(`webterm: kitty image ${imageId} refused, ${refused}`);
       return;
     }
     const fullB64 = entry.chunks.join('');
-    // Tell the client which id its image number was given. A client that
-    // addresses by number has no other way to learn it, and one that is
-    // waiting on the acknowledgement will not place the image until it lands.
-    this.sendResponse({ ...params, i: params.i, I: params.I }, 'OK', imageId);
     if (params.s && params.v) {
       this.pixelSizes.set(imageId, { width: params.s, height: params.v });
     }
@@ -591,10 +609,17 @@ export class KittyGraphics {
       placementSpec.cells = this.applyCursorPolicy(params, this.sourceSize(imageId)) ?? undefined;
     }
     this.decoding.add(imageId);
-    this.decodeAndStore(imageId, params, fullB64)
-      .then(() => {
+    // Two handlers rather than then/catch, so a fault while placing is not
+    // answered as a failed decode after the OK went out.
+    this.decodeAndStore(imageId, params, fullB64).then(
+      () => {
         this.decoding.delete(imageId);
         if (this.disposed) return;
+        // The reply waits for the decode, so a client is never told OK about
+        // an image that was then refused. It also tells the client which id
+        // its image number was given: a client that addresses by number has
+        // no other way to learn it.
+        this.sendResponse(reply, 'OK', imageId);
         if (placementSpec) this.placeImage(imageId, placementSpec);
         // Drain places that arrived while the decode was in flight.
         const queued = this.deferredPlacements.get(imageId);
@@ -602,12 +627,48 @@ export class KittyGraphics {
           this.deferredPlacements.delete(imageId);
           for (const spec of queued) this.placeImage(imageId, spec);
         }
-      })
-      .catch((error) => {
+      },
+      (error) => {
         this.decoding.delete(imageId);
         this.deferredPlacements.delete(imageId);
+        if (this.disposed) return;
+        this.sendResponse(reply, decodeErrorReply(error), imageId);
         console.warn('webterm: kitty decode failed', error);
-      });
+      },
+    );
+  }
+
+  /** Refuse an open transmission and free the chunks it holds. */
+  private refuseTransmit(entry: PendingTransmit, reason: string): void {
+    // The entry stays, so the chunks still to come land on it and are
+    // dropped, instead of starting a new image.
+    entry.refused = reason;
+    entry.chunks = [];
+    this.pendingChars -= entry.held;
+    entry.held = 0;
+  }
+
+  /**
+   * Refuse the oldest open transmissions, `keep` aside, until all of them
+   * together hold no more than one transmission may.
+   */
+  private limitPendingChars(keep: PendingTransmit): void {
+    for (const entry of this.pending.values()) {
+      if (this.pendingChars <= this.maxTransmitChars) return;
+      if (entry === keep || entry.refused) continue;
+      this.refuseTransmit(entry, 'too much image data in flight');
+    }
+  }
+
+  /** Drop the oldest open transmissions until at most `max` are left. */
+  private dropOldestTransmissions(max: number): void {
+    for (const [key, entry] of this.pending) {
+      if (this.pending.size <= max) return;
+      this.pendingChars -= entry.held;
+      this.pending.delete(key);
+      this.pendingPlacement.delete(key);
+      if (this.lastTransmitKey === key) this.lastTransmitKey = null;
+    }
   }
 
   private async decodeAndStore(
@@ -630,10 +691,24 @@ export class KittyGraphics {
 
     let bitmap: ImageBitmap;
     if (format === 100) {
+      // f=100 means PNG. The browser decodes by content, not by the type
+      // given here, so a GIF, JPEG or WebP sent as f=100 would decode at
+      // whatever size it declares. Only a PNG header can be checked first.
       const size = pngSize(bytes);
-      const refused = size ? checkImageSize(size.width, size.height, this.maxImagePixels) : null;
+      if (!size) throw new BadPngError('no PNG signature and IHDR header');
+      const refused = checkImageSize(size.width, size.height, this.maxImagePixels);
       if (refused) throw new ImageTooLargeError(refused);
-      bitmap = await createImageBitmap(new Blob([bytes as BlobPart], { type: 'image/png' }));
+      try {
+        bitmap = await createImageBitmap(new Blob([bytes as BlobPart], { type: 'image/png' }));
+      } catch (error) {
+        throw new BadPngError(error instanceof Error ? error.message : String(error));
+      }
+      // The header was checked, but the decoded bitmap is what is stored.
+      const decoded = checkImageSize(bitmap.width, bitmap.height, this.maxImagePixels);
+      if (decoded) {
+        this.closeBitmap(bitmap);
+        throw new ImageTooLargeError(decoded);
+      }
     } else if (format === 24 || format === 32) {
       if (!width || !height) throw new Error('raw pixel transmission needs s and v');
       const rgba = format === 24 ? rgbToRgba(bytes, width, height) : bytes;
@@ -674,7 +749,9 @@ export class KittyGraphics {
     // The decoded size is the authoritative one; a PNG carries its own
     // dimensions and the transmitted s/v may have been absent or approximate.
     this.pixelSizes.set(imageId, { width: bitmap.width, height: bitmap.height });
-    this.evict();
+    // Never the image that just arrived: an a=T placement for it does not
+    // exist yet, and a client that sent a=t places it next.
+    this.evict(imageId);
 
     if (previous) {
       for (const placement of this.placements.values()) {
@@ -692,16 +769,16 @@ export class KittyGraphics {
 
   /**
    * Evict least recently used images past the storage limit or the byte
-   * quota, placements aside.
+   * quota, placements and the image `keep` aside.
    */
-  private evict(): void {
+  private evict(keep: number): void {
     let bytes = this.storedBytes();
     const over = () => this.images.size > this.storageLimit || bytes > this.storageBytes;
     if (!over()) return;
     const placed = new Set<number>();
     for (const placement of this.placements.values()) placed.add(placement.imageId);
     const candidates = [...this.images.entries()]
-      .filter(([id]) => !placed.has(id))
+      .filter(([id]) => id !== keep && !placed.has(id))
       .sort((a, b) => a[1].used - b[1].used);
     for (const [id, image] of candidates) {
       if (!over()) break;

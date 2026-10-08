@@ -112,6 +112,27 @@ export class ImageTooLargeError extends Error {
   }
 }
 
+/** Raised when `f=100` data is not a PNG, or a PNG the browser cannot decode. */
+export class BadPngError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadPngError';
+  }
+}
+
+/**
+ * The reply a failed decode gets, in kitty's `ECODE:message` form. The
+ * message is cut to printable characters, because it is written back into the
+ * application's input stream.
+ */
+export function decodeErrorReply(error: unknown): string {
+  const code =
+    error instanceof ImageTooLargeError ? 'EFBIG' : error instanceof BadPngError ? 'EBADPNG' : 'EINVAL';
+  const message = error instanceof Error ? error.message : String(error);
+  // eslint-disable-next-line no-control-regex
+  return `${code}:${message.replace(/[\x00-\x1f\x7f-\x9f;]/g, ' ').slice(0, 200)}`;
+}
+
 /**
  * Check a declared or decoded image size against the pixel cap. Returns an
  * error message for a size that must not be decoded, and null for one that
