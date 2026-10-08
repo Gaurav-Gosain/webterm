@@ -114,7 +114,40 @@ export class Clipboard {
     } finally {
       window.removeEventListener('copy', onCopy, true);
     }
-    return ok && filled;
+    if (filled) return ok;
+    // Some engines, Safari among them, fire no copy event when nothing is
+    // selected. Only then select the text in a hidden textarea, which moves
+    // focus and so can send focus reports.
+    return this.execCopySelected(text);
+  }
+
+  /** Copy through execCommand by selecting `text` in a hidden textarea. */
+  private execCopySelected(text: string): boolean {
+    const active = document.activeElement as HTMLElement | null;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    Object.assign(ta.style, {
+      position: 'fixed',
+      left: '-9999px',
+      top: '0',
+      width: '1px',
+      height: '1px',
+      opacity: '0',
+    });
+    (document.body || document.documentElement).appendChild(ta);
+    let ok = false;
+    try {
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    if (active && typeof active.focus === 'function') active.focus();
+    return ok;
   }
 
   private deferToGesture(text: string): void {

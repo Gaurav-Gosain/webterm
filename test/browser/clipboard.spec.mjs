@@ -206,6 +206,39 @@ test('an OSC 52 copy through the execCommand fallback sends no focus reports', a
   expect(written).toBe('copied quietly');
 });
 
+test('the fallback still copies where no copy event fires without a selection', async ({ page }) => {
+  // Safari fires no copy event when nothing is selected. This page stops
+  // such an event before anything else sees it, which is the same thing
+  // from the clipboard layer's side, and runs the real execCommand.
+  await boot(page);
+
+  const result = await page.evaluate(async () => {
+    const original = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    const unselected = (event) => {
+      const active = document.activeElement;
+      const inField =
+        active && typeof active.selectionStart === 'number' && active.selectionEnd > active.selectionStart;
+      if (!inField && !String(document.getSelection())) event.stopImmediatePropagation();
+    };
+    window.addEventListener('copy', unselected, true);
+    try {
+      window.events.clipboard.length = 0;
+      window.term.write(`\x1b]52;c;${btoa('copied in safari')}\x07`);
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 100));
+      return { clipboard: window.events.clipboard.slice() };
+    } finally {
+      window.removeEventListener('copy', unselected, true);
+      Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
+    }
+  });
+  const written = await page.evaluate(() => navigator.clipboard.readText());
+
+  expect(result.clipboard).toEqual([{ text: 'copied in safari', written: true }]);
+  expect(written).toBe('copied in safari');
+});
+
 test('a refused write is retried on the next user gesture', async ({ page }) => {
   await boot(page);
 
