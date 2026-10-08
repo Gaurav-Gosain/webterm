@@ -52,8 +52,6 @@
         },
         clipboard: { copyOnSelect: params.get('copyOnSelect') === '1' },
       };
-      // The mode 2026 watchdog. 0 disables it, which is the arm that has to
-      // still show the pathology for the fixed arm to mean anything.
       // The kitty limits, set small so a suite can reach them cheaply.
       if (params.has('kittyMaxPixels')) {
         options.graphics.kitty.maxImagePixels = Number(params.get('kittyMaxPixels'));
@@ -61,6 +59,8 @@
       if (params.has('kittyStorageBytes')) {
         options.graphics.kitty.storageBytes = Number(params.get('kittyStorageBytes'));
       }
+      // The mode 2026 watchdog. 0 disables it, which is the arm that has to
+      // still show the pathology for the fixed arm to mean anything.
       if (params.has('syncTimeout')) {
         options.syncOutput = { timeoutMs: Number(params.get('syncTimeout')) };
       }
