@@ -6,7 +6,7 @@
 
 A small, embeddable browser terminal built on xterm.js.
 
-You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. It has zero runtime dependencies. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is 30.7 KB gzipped and nothing else is fetched by default.
+You bring the emulator and the bytes. `@xterm/xterm` and `@xterm/addon-fit` are the only two peer dependencies, so a project that already depends on xterm does not get a second copy of it, and the bytes come from whatever PTY, SSH bridge or WebSocket server you already run. What this package gives back is the layer between the two: kitty graphics, a clipboard that works on an insecure origin, unicode widths checked against a reference VT, renderer probing, write batching, input chunking and the rest of the details that every project ends up writing again. Its one runtime dependency is vtgl, an optional renderer that loads only when `renderer.prefer` is `'vtgl'`. Five further xterm addons (webgl, canvas, unicode-graphemes, image, web-links) are dynamically imported, and only when the options ask for them, so the ESM entry point is <!-- size:dist/index.js:gzip -->36.7 KB<!-- /size --> gzipped and nothing else is fetched by default.
 
 It is built to be taken apart. Transports are a three-method interface the package never looks inside; the clipboard write path, the unicode width table and the renderer choice are each one option; the underlying `Terminal` is public as `term.xterm`; and the window chrome is a separate entry point that imports nothing from the terminal, so a page that wants a frame around a code block does not download an emulator to get one.
 
@@ -205,7 +205,7 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
 </html>
 ```
 
-`.webterm` on the container is the only class the package needs, and the container needs a size, since the grid is fitted to whatever it is. The stylesheet is small (592 bytes gzipped) and covers the container, the scrollbar and the graphics overlay; `@xterm/xterm/css/xterm.css` is still required and is your import, because you may already have it.
+`.webterm` on the container is the only class the package needs, and the container needs a size, since the grid is fitted to whatever it is. The stylesheet is small (<!-- size:dist/webterm.css:gzip:bytes -->574 bytes<!-- /size --> gzipped) and covers the container, the scrollbar and the graphics overlay; `@xterm/xterm/css/xterm.css` is still required and is your import, because you may already have it.
 
 ### From a bundler
 
@@ -290,7 +290,7 @@ chrome.mount(document.getElementById('demo'));
 const term = await new WebTerm({ theme: 'catppuccin-mocha' }).open(chrome.content);
 ```
 
-The frame is a slot: it hands back an empty element and the terminal opens into it. `chrome.content.innerHTML = '<pre>anything at all</pre>'` works just as well, and the chrome bundle is 3.8 KB gzipped because it contains no emulator.
+The frame is a slot: it hands back an empty element and the terminal opens into it. `chrome.content.innerHTML = '<pre>anything at all</pre>'` works just as well, and the chrome bundle is <!-- size:dist/chrome/index.js:gzip -->3.9 KB<!-- /size --> gzipped because it contains no emulator.
 
 ## API
 
@@ -404,7 +404,7 @@ for (const { id, name, appearance } of listThemes()) {
 
 An unknown id returns `undefined` rather than throwing or falling back, because a picker restoring a scheme from an old config needs to know the difference. Ids read from a config file or a URL are accepted as plain strings, and an id of `constructor` or `toString` misses like any other.
 
-It is a separate entry point because it is 228 KB, 38.1 KB gzipped, against 104 KB for the terminal itself. A consumer who never imports it never downloads it, and the corpus adds nothing at all to `dist/index.js`, which builds byte for byte the same with it present and absent. Nothing in the main entry reaches for it, so nothing pulls it in by accident.
+It is a separate entry point because it is <!-- size:dist/themes/index.js:raw -->233.7 KB<!-- /size -->, <!-- size:dist/themes/index.js:gzip -->38.8 KB<!-- /size --> gzipped, against <!-- size:dist/index.js:raw -->122.6 KB<!-- /size --> for the terminal itself. A consumer who never imports it never downloads it, and the corpus adds nothing at all to `dist/index.js`, which builds byte for byte the same with it present and absent. Nothing in the main entry reaches for it, so nothing pulls it in by accident.
 
 Light and dark are computed rather than taken on trust. The background is gamma-decoded out of sRGB into a WCAG relative luminance and cut at 0.18, which is mid grey in linear light. Names are no guide: `Bright Lights`, `Thayer Bright` and `Tomorrow Night Bright` are all dark, `Tokyo Night Light` and `Night Owlish Light` are light. The upstream records do carry their own dark flag, and the computed classification agrees with all 345 of them, but it is hand-maintained metadata that a new scheme can arrive without, as thirteen of them arrive with no cursor colour.
 
@@ -600,20 +600,22 @@ The frame is CSS custom properties throughout, under `--webterm-chrome-*`, and n
 
 ## Size
 
-Build output, measured on the tree at hand with tsup 8 targeting es2022. The standalone bundles are minified; the ESM entry points are not. Gzip is the system `gzip` at its default level, which is what a plausible static host does.
+Build output, measured on the tree at hand with tsup 8 targeting es2022. The standalone bundles are minified; the ESM entry points are not. Gzip is zlib at level 6, the default level of `gzip`, which is what a plausible static host does. `npm run sizes` writes these figures from `dist/`, and `npm run sizes:check` fails when they drift.
 
+<!-- sizes:begin -->
 | File | Raw | Gzip | What it is |
 | --- | --- | --- | --- |
-| `dist/index.js` | 103.7 KB | 30.7 KB | ESM core, xterm external |
-| `dist/transport/index.js` | 6.4 KB | 1.9 KB | Both transports and the combinators |
-| `dist/chrome/index.js` | 12.7 KB | 3.8 KB | The window chrome |
-| `dist/themes/index.js` | 228.1 KB | 38.1 KB | The theme corpus, imported only if asked for |
-| `dist/webterm.css` | 1.2 KB | 0.6 KB | Container, scrollbar, overlay |
-| `dist/chrome.css` | 22.8 KB | 6.7 KB | The frame |
-| `dist/webterm.standalone.global.js` | 861.5 KB | 234.6 KB | Everything, xterm and all five addons inlined |
-| `dist/webterm-chrome.standalone.global.js` | 8.4 KB | 3.1 KB | The frame, for a script tag |
+| `dist/index.js` | 122.6 KB | 36.7 KB | ESM core, xterm external |
+| `dist/transport/index.js` | 7.1 KB | 2.1 KB | Both transports and the combinators |
+| `dist/chrome/index.js` | 13.0 KB | 3.9 KB | The window chrome |
+| `dist/themes/index.js` | 233.7 KB | 38.8 KB | The theme corpus, imported only if asked for |
+| `dist/webterm.css` | 1.3 KB | 0.6 KB | Container, scrollbar, overlay |
+| `dist/chrome.css` | 23.4 KB | 6.8 KB | The frame |
+| `dist/webterm.standalone.global.js` | 1812.8 KB | 614.9 KB | Everything inlined: xterm, all five addons and the vtgl renderer |
+| `dist/webterm-chrome.standalone.global.js` | 8.6 KB | 3.2 KB | The frame, for a script tag |
+<!-- sizes:end -->
 
-The standalone bundle is large because an IIFE cannot code-split, so every dynamic import is inlined, including `@xterm/addon-image` at 76 KB, which the default options never load. A bundler build does not pay that: the addons stay dynamic imports and only the ones the options ask for are fetched.
+The standalone bundle is large because an IIFE cannot code-split, so every dynamic import is inlined, including `@xterm/addon-image` at 76 KB and the vtgl renderer with its HarfBuzz wasm and Arabic font, none of which the default options load. A bundler build does not pay that: the addons stay dynamic imports and only the ones the options ask for are fetched.
 
 ## Tests
 
