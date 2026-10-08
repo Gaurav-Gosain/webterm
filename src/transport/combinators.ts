@@ -73,9 +73,20 @@ export function reconnecting(factory: () => Transport, options: ReconnectOptions
   async function connect(sink: TransportSink): Promise<void> {
     const transport = factory();
     active = transport;
+    // One close per connection. A transport can report the same close from
+    // two places (WebTransport sees it on the read loop and on `closed`), and
+    // each report used to schedule its own reconnect, so one server shutdown
+    // opened two connections and doubled every byte after it.
+    let ended = false;
     const wrapped: TransportSink = {
-      data: (bytes) => sink.data(bytes),
+      data: (bytes) => {
+        // A connection that was replaced must not keep feeding the terminal.
+        if (ended || active !== transport) return;
+        sink.data(bytes);
+      },
       closed: (error) => {
+        if (ended || active !== transport) return;
+        ended = true;
         if (stopped) return;
         // Report the close upward first, then retry: a consumer that wants to
         // show a disconnected state should see it during the backoff, not
@@ -84,15 +95,27 @@ export function reconnecting(factory: () => Transport, options: ReconnectOptions
         schedule(sink);
       },
     };
-    await transport.start(wrapped);
+    try {
+      await transport.start(wrapped);
+    } catch (error) {
+      // The rejection is this connection's close. A WebSocket that fails to
+      // open also fires onclose after it, and acting on that as well would
+      // schedule a second attempt next to the one the caller schedules.
+      ended = true;
+      throw error;
+    }
     attempts = 0;
   }
 
   function schedule(sink: TransportSink): void {
-    if (stopped || attempts >= maxAttempts) return;
+    // One retry in flight at a time. A second timer would open a second
+    // connection, and overwriting the handle would leave close() unable to
+    // cancel the first.
+    if (stopped || timer !== undefined || attempts >= maxAttempts) return;
     const wait = Math.min(delayMs * Math.pow(factor, attempts), maxDelayMs);
     attempts++;
     timer = setTimeout(() => {
+      timer = undefined;
       if (stopped) return;
       connect(sink).catch(() => schedule(sink));
     }, wait);

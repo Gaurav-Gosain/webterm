@@ -101,8 +101,19 @@ export function webTransportTransport(
   return {
     name: 'webtransport',
 
-    async start(sink: TransportSink) {
+    async start(outer: TransportSink) {
       if (typeof WebTransport === 'undefined') throw new Error('WebTransport is not supported here');
+      // The read loop and `wt.closed` both observe the end of the session, and
+      // a server-initiated close reaches both. Report it once.
+      let reported = false;
+      const sink: TransportSink = {
+        data: (bytes) => outer.data(bytes),
+        closed: (error) => {
+          if (reported) return;
+          reported = true;
+          outer.closed(error);
+        },
+      };
       const target = typeof url === 'function' ? url() : url;
       const options = config.options ? await config.options() : {};
 
