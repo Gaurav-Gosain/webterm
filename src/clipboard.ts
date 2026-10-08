@@ -83,33 +83,38 @@ export class Clipboard {
     }
   }
 
+  /**
+   * Copy through execCommand without moving focus.
+   *
+   * A `copy` listener fills the clipboard from `text` directly. The older way
+   * focused a hidden textarea, selected it and refocused the terminal. xterm
+   * saw that as a blur and a focus, so with focus reporting (mode 1004) on,
+   * every copy sent `ESC[O ESC[I` to the application. Vim and tmux act on
+   * those.
+   */
   private execCopy(text: string): boolean {
     if (typeof document.execCommand !== 'function') return false;
-    const active = document.activeElement as HTMLElement | null;
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    Object.assign(ta.style, {
-      position: 'fixed',
-      left: '-9999px',
-      top: '0',
-      width: '1px',
-      height: '1px',
-      opacity: '0',
-    });
-    (document.body || document.documentElement).appendChild(ta);
+    let filled = false;
+    const onCopy = (event: Event) => {
+      const data = (event as globalThis.ClipboardEvent).clipboardData;
+      if (!data) return;
+      data.setData('text/plain', text);
+      event.preventDefault();
+      // Captured on the window, ahead of xterm's own copy listener, which
+      // would otherwise replace the text with the current selection.
+      event.stopImmediatePropagation();
+      filled = true;
+    };
+    window.addEventListener('copy', onCopy, true);
     let ok = false;
     try {
-      ta.focus();
-      ta.select();
-      ta.setSelectionRange(0, text.length);
       ok = document.execCommand('copy');
     } catch {
       ok = false;
+    } finally {
+      window.removeEventListener('copy', onCopy, true);
     }
-    ta.remove();
-    if (active && typeof active.focus === 'function') active.focus();
-    return ok;
+    return ok && filled;
   }
 
   private deferToGesture(text: string): void {

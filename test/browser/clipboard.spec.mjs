@@ -100,10 +100,15 @@ test('without navigator.clipboard the write falls back to execCommand', async ({
     let execCalled = 0;
     let selected = '';
     const originalExec = document.execCommand;
+    // A copy the way the browser runs one: a copy event at the focused element,
+    // whose clipboardData is what lands on the clipboard.
     document.execCommand = (command) => {
       if (command === 'copy') {
         execCalled++;
-        selected = document.activeElement?.value ?? '';
+        const clipboardData = new DataTransfer();
+        const event = new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true });
+        (document.activeElement ?? document.body).dispatchEvent(event);
+        selected = clipboardData.getData('text/plain');
         return true;
       }
       return originalExec.call(document, command);
@@ -125,14 +130,20 @@ test('without navigator.clipboard the write falls back to execCommand', async ({
   expect(result.selected).toBe('written without the async api');
 });
 
-test('the hidden textarea is removed and focus is restored', async ({ page }) => {
+test('the fallback copy leaves no textarea behind and focus where it was', async ({ page }) => {
   await boot(page);
 
   const result = await page.evaluate(async () => {
     const original = navigator.clipboard;
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     const originalExec = document.execCommand;
-    document.execCommand = () => true;
+    document.execCommand = () => {
+      const clipboardData = new DataTransfer();
+      (document.activeElement ?? document.body).dispatchEvent(
+        new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true }),
+      );
+      return true;
+    };
 
     const before = document.activeElement;
     window.term.focus();
@@ -156,6 +167,43 @@ test('the hidden textarea is removed and focus is restored', async ({ page }) =>
 
   expect(result.textareasLeft).toBe(0);
   expect(result.focusRestored).toBe(true);
+});
+
+test('an OSC 52 copy through the execCommand fallback sends no focus reports', async ({ page }) => {
+  // The fallback used to focus a hidden textarea and then refocus the
+  // terminal. With focus reporting on (mode 1004), xterm turned that into
+  // ESC[O ESC[I, and the application saw a blur and a focus on every copy.
+  // This runs the real execCommand, not a stub.
+  await boot(page);
+
+  const result = await page.evaluate(async () => {
+    const original = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      window.term.focus();
+      window.term.write('\x1b[?1004h');
+      await window.term.flush();
+      window.clearData();
+      window.events.clipboard.length = 0;
+
+      window.term.write(`\x1b]52;c;${btoa('copied quietly')}\x07`);
+      await window.term.flush();
+      await new Promise((r) => setTimeout(r, 100));
+      return {
+        sent: window.dataText(),
+        clipboard: window.events.clipboard.slice(),
+        focused: document.activeElement === window.term.xterm.textarea,
+      };
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
+    }
+  });
+  const written = await page.evaluate(() => navigator.clipboard.readText());
+
+  expect(result.sent).toBe('');
+  expect(result.clipboard).toEqual([{ text: 'copied quietly', written: true }]);
+  expect(result.focused).toBe(true);
+  expect(written).toBe('copied quietly');
 });
 
 test('a refused write is retried on the next user gesture', async ({ page }) => {
