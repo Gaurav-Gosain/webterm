@@ -205,7 +205,7 @@ The standalone build inlines xterm.js and every addon, so this is one script tag
 </html>
 ```
 
-The standalone build also carries the transports, under the same global: `WebTerm.webSocketTransport`, `WebTerm.webTransportTransport`, `WebTerm.lengthPrefixCodec`, `WebTerm.fallback` and `WebTerm.reconnecting`. A script-tag page does not have to write its own WebTransport, WebSocket fallback, framing or reconnect.
+The standalone build also carries touch support as `WebTerm.mobile` (see [Touch](#touch)), and the transports, under the same global: `WebTerm.webSocketTransport`, `WebTerm.webTransportTransport`, `WebTerm.lengthPrefixCodec`, `WebTerm.fallback` and `WebTerm.reconnecting`. A script-tag page does not have to write its own WebTransport, WebSocket fallback, framing or reconnect.
 
 `.webterm` on the container is the only class the package needs, and the container needs a size, since the grid is fitted to whatever it is. The stylesheet is small (<!-- size:dist/webterm.css:gzip:bytes -->574 bytes<!-- /size --> gzipped) and covers the container, the scrollbar and the graphics overlay; `@xterm/xterm/css/xterm.css` is still required and is your import, because you may already have it.
 
@@ -619,6 +619,44 @@ Two geometry notes, both of which are the reason the DOM is shaped the way it is
 
 The frame is CSS custom properties throughout, under `--webterm-chrome-*`, and nothing is injected into the document on import. `update()` rebuilds the chrome above the slot without recreating the slot, so a terminal living inside it survives an options change.
 
+## Touch
+
+The `@gaurav-gosain/webterm/mobile` entry adds touch support. It installs only on a touch device. On a desktop, each call returns an inert controller, so a desktop pays nothing. Add `?mobile=1` or `?mobile=0` to the page URL to force the choice in a test.
+
+```ts
+import { WebTerm } from '@gaurav-gosain/webterm';
+import { installKeyBar, installTouchMouse } from '@gaurav-gosain/webterm/mobile';
+
+const term = new WebTerm();
+await term.open(container);
+
+const bar = installKeyBar(
+  {
+    send: (text) => socket.send(text),
+    focusTarget: () => term.xterm.textarea,
+  },
+  { prefix: { key: 'b', code: 'KeyB', ctrl: true } },
+);
+
+installTouchMouse({
+  screen: term.xterm.element.querySelector('.xterm-screen'),
+  onTap: () => bar.focusInput(),
+});
+```
+
+The module has four parts:
+
+- `installKeyBar(host, options)` shows a bar with the keys a phone keyboard does not have. The default set is `DEFAULT_KEYS`: Escape, Tab, sticky Ctrl and Alt, the arrows and some punctuation. Set `keys` for one row, or `rows` for more than one row. A row with `collapsible: true` can fold away. Set `prefix` to a leader chord, such as Ctrl+B for tmux. Then a key with `prefix: true` sends the leader, and a key with `prefixed: true` sends the leader and the key in one tap. Set `actions` to add page controls to the last row.
+- The bar also measures the software keyboard. It writes the keyboard height to `--webterm-kb-inset` and the bar height to `--webterm-keybar-h` on the document element. Pad the terminal container with the sum of the two, and the grid stays above the bar and the keyboard.
+- `installTouchMouse(host, options)` makes a finger act as a mouse. A tap is a click, and a long press is a right click. Hold, then drag, to send a mouse drag or to select text. A pan stays a scroll. The module also fixes the NaN mouse reports that the xterm.js inertial scroll sends.
+- `installDraggable(el, options)` lets the user move a floating control, and remembers where the user left it.
+
+Sticky modifiers do not change the bytes by themselves. Before you send the terminal's own input, call `bar.transformInput(text)` when `bar.pending` is true. A transport `send` is the right place, because the bytes there are still one keystroke.
+
+On a script-tag page, the same functions are on `WebTerm.mobile` in the standalone bundle.
+
+Every id, class, custom property and storage key starts with the `namespace` option. The default is `webterm`. sip passes `sip`, so its pages keep the names `#sip-keybar`, `--sip-kb-inset` and `sip.touch.hint`. The colours come from custom properties in the same namespace, such as `--webterm-surface` and `--webterm-warn`, with a dark default.
+
 ## Size
 
 Build output, measured on the tree at hand with tsup 8 targeting es2022. The standalone bundles are minified; the ESM entry points are not. Gzip is zlib at level 6, the default level of `gzip`, which is what a plausible static host does. `npm run sizes` writes these figures from `dist/`, and `npm run sizes:check` fails when they drift.
@@ -630,10 +668,11 @@ Build output, measured on the tree at hand with tsup 8 targeting es2022. The sta
 | `dist/transport/index.js` | 7.9 KB | 2.3 KB | Both transports and the combinators |
 | `dist/vtgl/index.js` | 17.4 KB | 5.0 KB | The vtgl renderer adapter, vtgl itself external |
 | `dist/chrome/index.js` | 13.0 KB | 3.9 KB | The window chrome |
+| `dist/mobile/index.js` | 61.5 KB | 18.7 KB | Touch support: key bar, touch mouse, keyboard-aware layout |
 | `dist/themes/index.js` | 233.7 KB | 38.8 KB | The theme corpus, imported only if asked for |
 | `dist/webterm.css` | 1.3 KB | 0.6 KB | Container, scrollbar, overlay |
 | `dist/chrome.css` | 23.4 KB | 6.8 KB | The frame |
-| `dist/webterm.standalone.global.js` | 896.1 KB | 245.2 KB | Everything inlined for a script tag: xterm, all five addons and the transports |
+| `dist/webterm.standalone.global.js` | 928.4 KB | 255.7 KB | Everything inlined for a script tag: xterm, all five addons, the transports and touch support |
 | `dist/webterm-vtgl.standalone.global.js` | 923.1 KB | 371.9 KB | The vtgl renderer for a script tag, with vtgl, its HarfBuzz wasm and font |
 | `dist/webterm-chrome.standalone.global.js` | 8.6 KB | 3.2 KB | The frame, for a script tag |
 <!-- sizes:end -->

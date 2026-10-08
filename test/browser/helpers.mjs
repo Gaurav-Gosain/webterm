@@ -98,3 +98,35 @@ export async function readScanline(page, buffer, at = 0.5) {
 export function apc(control, payload = '') {
   return `\x1b_G${control}${payload ? `;${payload}` : ''}\x1b\\`;
 }
+
+/**
+ * Load the touch fixture with a config, and wait until the terminal has opened
+ * and the touch layer is installed. The config is the fixture's: keys, rows,
+ * prefix, actions, keyBar, keyboardKey, namespace and mouse.
+ */
+export async function bootMobile(page, config = {}, extra = '') {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await checkServedRoot(page);
+  const query = `?config=${encodeURIComponent(JSON.stringify(config))}${extra}`;
+  await page.goto(`/test/fixtures/mobile.html${query}`);
+  await page.waitForFunction(() => window.ready === true, null, { timeout: 30_000 });
+  if (errors.length) throw new Error(`the fixture threw during boot:\n${errors.join('\n')}`);
+  return page;
+}
+
+/** Every input the fixture recorded since the last clear, as one flat array of char codes. */
+export function sentCodes(page) {
+  return page.evaluate(() => Array.from(window.sent.join('')).map((c) => c.codePointAt(0)));
+}
+
+/** Every input the fixture recorded since the last clear, as one string. */
+export function sentText(page) {
+  return page.evaluate(() => window.sent.join(''));
+}
+
+export function clearSent(page) {
+  return page.evaluate(() => {
+    window.sent.length = 0;
+  });
+}

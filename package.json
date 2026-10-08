@@ -39,7 +39,11 @@
       "types": "./dist/chrome/index.d.ts",
       "import": "./dist/chrome/index.js"
     },
-    "./chrome.css": "./dist/chrome.css"
+    "./chrome.css": "./dist/chrome.css",
+    "./mobile": {
+      "types": "./dist/mobile/index.d.ts",
+      "import": "./dist/mobile/index.js"
+    }
   },
   "scripts": {
     "build": "tsup",

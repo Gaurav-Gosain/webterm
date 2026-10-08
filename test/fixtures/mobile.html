@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>webterm mobile fixture</title>
+    <link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/dist/webterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e2e;
+        overflow: hidden;
+      }
+      /* Padded by the touch layer's two custom properties, which is how a page
+         keeps the grid out from under the key bar and the software keyboard.
+         The padding is set from script, because the property names depend on
+         the namespace under test. */
+      #wrap {
+        position: fixed;
+        inset: 0;
+        box-sizing: border-box;
+      }
+      #host {
+        width: 100%;
+        height: 100%;
+      }
+      #gear {
+        position: fixed;
+        left: 600px;
+        top: 300px;
+        width: 40px;
+        height: 40px;
+        z-index: 1005;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The touch layer against a real WebTerm, with no server. A transport
+      stands in for the wire: what the terminal sends goes through the key
+      bar's transformInput, the way a host folds sticky modifiers into its
+      outbound bytes, and lands in window.sent. What the bar sends itself goes
+      straight to window.sent, the way a host's direct input path does.
+
+      Options come from the query string: ?config=<json> with any of keys,
+      rows, actions (labels only), prefix, keyBar, keyboardKey, namespace and
+      mouse (the touch mouse options), and ?renderer=.
+    -->
+    <div id="wrap"><div id="host" class="webterm"></div></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "@xterm/xterm": "/node_modules/@xterm/xterm/lib/xterm.mjs",
+          "@xterm/addon-fit": "/node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+          "@xterm/addon-webgl": "/node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs",
+          "@xterm/addon-canvas": "/node_modules/@xterm/addon-canvas/lib/xterm-addon-canvas.mjs",
+          "@xterm/addon-image": "/node_modules/@xterm/addon-image/lib/addon-image.mjs",
+          "@xterm/addon-web-links": "/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+          "@xterm/addon-unicode-graphemes": "/node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.mjs"
+        }
+      }
+    </script>
+    <script type="module">
+      import { WebTerm } from '/dist/index.js';
+      import * as mobile from '/dist/mobile/index.js';
+
+      const params = new URLSearchParams(location.search);
+      const config = JSON.parse(params.get('config') ?? '{}');
+      const ns = config.namespace ?? mobile.DEFAULT_NAMESPACE;
+
+      document.getElementById('wrap').style.paddingBottom =
+        `calc(var(--${ns}-kb-inset, 0px) + var(--${ns}-keybar-h, 0px))`;
+
+      // Every piece of input, as one string per send.
+      window.sent = [];
+      window.mobile = mobile;
+      window.gearClicks = 0;
+
+      const term = new WebTerm({
+        fontFamily: 'monospace',
+        fontSize: 14,
+        renderer: { prefer: params.get('renderer') ?? 'canvas' },
+      });
+      window.term = term;
+      await term.open(document.getElementById('host'));
+
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      let bar = null;
+      term.attach({
+        name: 'fixture',
+        start() {},
+        // The terminal's own input: keystrokes, mouse reports, replies. This
+        // is the last point at which a keystroke is still visible as itself,
+        // so it is where the bar's armed modifiers are folded in.
+        send(bytes) {
+          let text = decoder.decode(bytes);
+          if (bar && bar.enabled && bar.pending) text = bar.transformInput(text);
+          window.sent.push(text);
+        },
+        close() {},
+      });
+
+      const actions = (config.actions ?? []).map((label) => ({
+        label,
+        title: label,
+        run: () => {
+          window.actionRuns = (window.actionRuns ?? 0) + 1;
+        },
+      }));
+
+      bar = mobile.installKeyBar(
+        {
+          send: (text) => {
+            window.sent.push(text);
+          },
+          focusTarget: () => term.xterm.textarea,
+          isReady: () => true,
+        },
+        {
+          keys: config.keys ?? mobile.DEFAULT_KEYS,
+          rows: config.rows ?? null,
+          prefix: config.prefix ?? null,
+          actions,
+          keyBar: config.keyBar !== false,
+          keyboardKey: config.keyboardKey,
+          namespace: config.namespace,
+        },
+      );
+      window.bar = bar;
+
+      window.touchMouse = mobile.installTouchMouse(
+        {
+          screen: term.xterm.element.querySelector('.xterm-screen'),
+          onTap: () => bar.focusInput(),
+        },
+        { ...(config.mouse ?? {}), namespace: config.namespace },
+      );
+
+      // A floating control for installDraggable, on a desktop only, where it
+      // cannot sit over a key or the spot a touch test taps.
+      if (!bar.enabled) {
+        const gear = document.createElement('button');
+        gear.id = 'gear';
+        gear.type = 'button';
+        gear.textContent = 'G';
+        document.body.appendChild(gear);
+        gear.addEventListener('click', () => window.gearClicks++);
+        mobile.installDraggable(gear, { storageKey: 'webterm-fixture-gear', margin: 8 });
+      }
+
+      term.focus();
+      window.ready = true;
+    </script>
+  </body>
+</html>

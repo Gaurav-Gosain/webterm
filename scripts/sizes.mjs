@@ -29,12 +29,13 @@ const FILES = [
   ['dist/transport/index.js', 'Both transports and the combinators'],
   ['dist/vtgl/index.js', 'The vtgl renderer adapter, vtgl itself external'],
   ['dist/chrome/index.js', 'The window chrome'],
+  ['dist/mobile/index.js', 'Touch support: key bar, touch mouse, keyboard-aware layout'],
   ['dist/themes/index.js', 'The theme corpus, imported only if asked for'],
   ['dist/webterm.css', 'Container, scrollbar, overlay'],
   ['dist/chrome.css', 'The frame'],
   [
     'dist/webterm.standalone.global.js',
-    'Everything inlined for a script tag: xterm, all five addons and the transports',
+    'Everything inlined for a script tag: xterm, all five addons, the transports and touch support',
   ],
   [
     'dist/webterm-vtgl.standalone.global.js',

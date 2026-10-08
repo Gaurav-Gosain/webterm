@@ -9,7 +9,7 @@ import { expect, test } from '@playwright/test';
 import { ROOT } from '../port.mjs';
 import { boot } from './helpers.mjs';
 
-test('the standalone exposes the core, the search and the transports', async ({ page }) => {
+test('the standalone exposes the core, the search, the transports and touch support', async ({ page }) => {
   await boot(page, '', 'standalone.html');
 
   const shape = await page.evaluate(() => {
@@ -23,6 +23,8 @@ test('the standalone exposes the core, the search and the transports', async ({ 
       fallback: typeof W.fallback,
       reconnecting: typeof W.reconnecting,
       BufferSearch: typeof W.BufferSearch,
+      installKeyBar: typeof W.mobile?.installKeyBar,
+      installTouchMouse: typeof W.mobile?.installTouchMouse,
       vtgl: 'vtgl' in W,
     };
   });
@@ -35,6 +37,8 @@ test('the standalone exposes the core, the search and the transports', async ({ 
     fallback: 'function',
     reconnecting: 'function',
     BufferSearch: 'function',
+    installKeyBar: 'function',
+    installTouchMouse: 'function',
     vtgl: false,
   });
 });

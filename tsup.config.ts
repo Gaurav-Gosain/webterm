@@ -14,6 +14,9 @@ export default defineConfig([
       // The vtgl renderer. Its own entry, so a consumer who never asks for it
       // never bundles it; vtgl itself stays an external, optional peer.
       'vtgl/index': 'src/vtgl/index.ts',
+      // Touch support. Its own entry, so a page without a touch screen in
+      // mind never downloads it.
+      'mobile/index': 'src/mobile/index.ts',
       // The colour scheme corpus is its own entry point because it is two
       // orders of magnitude larger than the code that uses it. A consumer who
       // never imports it never downloads it, and the main entry's size is
