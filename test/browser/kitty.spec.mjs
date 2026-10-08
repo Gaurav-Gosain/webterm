@@ -4,6 +4,8 @@
 // term.parser.registerApcHandler. @xterm/xterm 6.0.0 shipped without it and
 // 6.1.0 restored it, so the first test here fails loudly on a version bump
 // rather than leaving every graphics test to fail as a mystery.
+import { deflateSync } from 'node:zlib';
+
 import { expect, test } from '@playwright/test';
 
 import { apc, boot, solidRgba, toBase64 } from './helpers.mjs';
@@ -894,4 +896,73 @@ test('a read-only terminal answers no probes', async ({ page }) => {
   });
 
   expect(sent).toBe(0);
+});
+
+// --- Limits on untrusted input ---------------------------------------------
+//
+// Any program the terminal shows can send these: `cat` of a crafted file, a
+// hostile SSH host, a log line. One 348 KB payload declaring 8192x8192 grew
+// the browser by 600 MiB before the limits existed.
+
+/** Write `sequence`, then return what the overlay replied and still holds. */
+async function sendAndSettle(page, sequence) {
+  return page.evaluate(async (seq) => {
+    window.clearData();
+    window.term.write(seq);
+    await window.term.flush();
+    await new Promise((r) => setTimeout(r, 300));
+    return { replies: window.dataText(), images: window.term.kitty.imageCount };
+  }, sequence);
+}
+
+test('an image declaring more pixels than the cap is refused before decoding', async ({ page }) => {
+  await boot(page);
+  // A few compressed bytes that claim to be an 8192x8192 RGBA frame.
+  const payload = toBase64(deflateSync(Buffer.alloc(1024)));
+  const result = await sendAndSettle(
+    page,
+    apc('a=t,f=32,o=z,i=40,s=8192,v=8192,t=d', payload),
+  );
+  expect(result.replies).toContain('\x1b_Gi=40;EFBIG:');
+  expect(result.replies).not.toContain('OK');
+  expect(result.images).toBe(0);
+});
+
+test('a deflate bomb is cut off at the size the image declared', async ({ page }) => {
+  await boot(page);
+  // 64 MiB of zeros, about 87 KB on the wire, for a 16x16 image.
+  const payload = toBase64(deflateSync(Buffer.alloc(64 * 1024 * 1024)));
+  const result = await sendAndSettle(page, apc('a=t,f=32,o=z,i=41,s=16,v=16,t=d', payload));
+  expect(result.images).toBe(0);
+});
+
+test('a transmission longer than the largest allowed image is dropped', async ({ page }) => {
+  // An 8x8 cap allows 256 bytes of pixels plus 64 KiB of slack, about 88 K
+  // base64 characters. These chunks carry 120 K.
+  await boot(page, '?kittyMaxPixels=64');
+  const chunk = 'A'.repeat(40_000);
+  const sequence = [
+    apc('a=t,f=100,i=42,m=1,t=d', chunk),
+    apc('m=1', chunk),
+    apc('m=1', chunk),
+    apc('m=0', chunk),
+  ].join('');
+  const result = await sendAndSettle(page, sequence);
+  expect(result.replies).toContain('\x1b_Gi=42;EFBIG:');
+  expect(result.images).toBe(0);
+
+  // The terminal still takes an image that fits.
+  const after = await sendAndSettle(page, transmitAndPlace(43, 8, 8, [255, 0, 0]));
+  expect(after.replies).toContain('\x1b_Gi=43;OK');
+  expect(after.images).toBe(1);
+});
+
+test('stored images are evicted past the byte quota', async ({ page }) => {
+  // Room for three 16x16 RGBA images.
+  await boot(page, `?kittyStorageBytes=${3 * 16 * 16 * 4}`);
+  const sequence = [50, 51, 52, 53, 54]
+    .map((id) => apc(`a=t,f=32,i=${id},s=16,v=16,t=d`, toBase64(solidRgba(16, 16, [0, 0, 255]))))
+    .join('');
+  const result = await sendAndSettle(page, sequence);
+  expect(result.images).toBe(3);
 });

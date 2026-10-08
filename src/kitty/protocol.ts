@@ -83,14 +83,99 @@ export function base64Decode(b64: string): Uint8Array {
   return out;
 }
 
-export async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+/**
+ * The largest image, in pixels, the overlay decodes by default: 4096 by 4096,
+ * which is 64 MiB as RGBA.
+ *
+ * Every byte of a kitty transmission comes from the far end, and the size it
+ * declares is not the size it sends. One 348 KB `o=z` payload declaring
+ * 8192x8192 made the browser allocate a 256 MiB bitmap and grow by 600 MiB.
+ */
+export const DEFAULT_MAX_IMAGE_PIXELS = 4096 * 4096;
+
+/**
+ * The decoded bytes all stored images may hold together by default before the
+ * least recently used unplaced one is evicted. kitty's own quota is 320 MB.
+ */
+export const DEFAULT_STORAGE_BYTES = 320 * 1024 * 1024;
+
+/** The base64 length of `bytes` bytes of data. */
+export function base64Length(bytes: number): number {
+  return 4 * Math.ceil(bytes / 3);
+}
+
+/** Raised when a transmission is larger than the limits allow. */
+export class ImageTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImageTooLargeError';
+  }
+}
+
+/**
+ * Check a declared or decoded image size against the pixel cap. Returns an
+ * error message for a size that must not be decoded, and null for one that
+ * may be.
+ */
+export function checkImageSize(width: number, height: number, maxPixels: number): string | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0) {
+    return `invalid size ${width}x${height}`;
+  }
+  if (width * height > maxPixels) {
+    return `${width}x${height} is more than ${maxPixels} pixels`;
+  }
+  return null;
+}
+
+/**
+ * The width and height in a PNG header, or null when `bytes` does not start
+ * with one. Read before the browser decodes the image, so a small PNG that
+ * declares a huge canvas is refused before any pixel buffer exists.
+ */
+export function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < 24) return null;
+  for (let i = 0; i < signature.length; i++) if (bytes[i] !== signature[i]) return null;
+  // The first chunk must be IHDR: length (4), type (4), then width and height.
+  if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== 'IHDR') return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+}
+
+/**
+ * Inflate a zlib stream, stopping once the output passes `limit` bytes.
+ *
+ * The output is counted as it is produced and the stream is cancelled at the
+ * limit, so a deflate bomb costs at most `limit` bytes, never its full size.
+ */
+export async function inflate(bytes: Uint8Array, limit = Infinity): Promise<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error('DecompressionStream unavailable, cannot handle o=z');
   }
   const stream = new Blob([bytes as BlobPart])
     .stream()
     .pipeThrough(new DecompressionStream('deflate'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      throw new ImageTooLargeError(`inflated data is more than ${limit} bytes`);
+    }
+    parts.push(value);
+  }
+  if (parts.length === 1) return parts[0];
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }
 
 export function rgbToRgba(rgb: Uint8Array, width: number, height: number): Uint8Array {

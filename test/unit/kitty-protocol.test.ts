@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { clampSourceRect, fitRgba, parseControl, rgbToRgba, splitApc } from '../../src/kitty/protocol.ts';
+import { deflateSync } from 'node:zlib';
+
+import {
+  base64Length,
+  checkImageSize,
+  clampSourceRect,
+  DEFAULT_MAX_IMAGE_PIXELS,
+  fitRgba,
+  ImageTooLargeError,
+  inflate,
+  parseControl,
+  pngSize,
+  rgbToRgba,
+  splitApc,
+} from '../../src/kitty/protocol.ts';
 
 test('numeric keys parse as numbers and everything else stays a string', () => {
   const cmd = parseControl('a=T,f=100,i=42,s=10,v=20,o=z,t=d');
@@ -95,4 +109,48 @@ test('a source rectangle is clamped to the image bounds', () => {
     w: 20,
     h: 20,
   });
+});
+
+// --- Limits on untrusted input ---------------------------------------------
+
+test('a deflate bomb is cut off at the limit instead of inflating in full', async () => {
+  // 64 MiB of zeros deflates to about 64 KB. Unbounded, the overlay inflated
+  // all of it for an image that declared 16x16.
+  const bomb = deflateSync(Buffer.alloc(64 * 1024 * 1024));
+  assert.ok(bomb.length < 100 * 1024, `the bomb is small on the wire (${bomb.length} bytes)`);
+  await assert.rejects(inflate(new Uint8Array(bomb), 16 * 16 * 4), ImageTooLargeError);
+});
+
+test('a stream within the limit inflates to the same bytes', async () => {
+  const data = new Uint8Array(300_000);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 31) & 0xff;
+  const out = await inflate(new Uint8Array(deflateSync(data)), data.length);
+  assert.deepEqual(out, data);
+});
+
+test('the pixel cap refuses 8192x8192 and allows a 4K frame', () => {
+  assert.equal(DEFAULT_MAX_IMAGE_PIXELS, 4096 * 4096);
+  assert.match(checkImageSize(8192, 8192, DEFAULT_MAX_IMAGE_PIXELS) ?? '', /more than/);
+  assert.equal(checkImageSize(3840, 2160, DEFAULT_MAX_IMAGE_PIXELS), null);
+  assert.equal(checkImageSize(4096, 4096, DEFAULT_MAX_IMAGE_PIXELS), null);
+  assert.match(checkImageSize(-1, 5, DEFAULT_MAX_IMAGE_PIXELS) ?? '', /invalid/);
+});
+
+test('a PNG header is read before the image is decoded', () => {
+  const png = new Uint8Array(33);
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+  const view = new DataView(png.buffer);
+  view.setUint32(16, 20000, false);
+  view.setUint32(20, 30000, false);
+  assert.deepEqual(pngSize(png), { width: 20000, height: 30000 });
+  assert.equal(pngSize(new Uint8Array(10)), null);
+  assert.equal(pngSize(new Uint8Array(40)), null);
+});
+
+test('base64 length rounds up to whole quads', () => {
+  assert.equal(base64Length(0), 0);
+  assert.equal(base64Length(1), 4);
+  assert.equal(base64Length(3), 4);
+  assert.equal(base64Length(4), 8);
 });

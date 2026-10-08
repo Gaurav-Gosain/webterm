@@ -49,9 +49,15 @@ import type { IMarker, Terminal } from '@xterm/xterm';
 import type { KittyOptions } from '../types.js';
 import {
   base64Decode,
+  base64Length,
+  checkImageSize,
+  DEFAULT_MAX_IMAGE_PIXELS,
+  DEFAULT_STORAGE_BYTES,
   clampSourceRect,
   fitRgba,
+  ImageTooLargeError,
   inflate,
+  pngSize,
   rgbToRgba,
   splitApc,
   type KittyCommand,
@@ -79,6 +85,15 @@ interface VirtualImage {
   gridCols: number;
   gridRows: number;
   declared: boolean;
+}
+
+interface PendingTransmit {
+  params: KittyCommand;
+  chunks: string[];
+  /** Base64 characters received so far. */
+  length: number;
+  /** Set once the transmission passed the size cap; later chunks are dropped. */
+  tooLarge: boolean;
 }
 
 interface StoredImage {
@@ -155,6 +170,10 @@ export interface KittyGraphicsOptions extends KittyOptions {
 export class KittyGraphics {
   private readonly anchor: 'scrollback' | 'viewport';
   private readonly storageLimit: number;
+  private readonly storageBytes: number;
+  private readonly maxImagePixels: number;
+  /** The longest base64 payload one transmission may carry. */
+  private readonly maxTransmitChars: number;
 
   /** Decoded images, keyed by the resolved image id. */
   private readonly images = new Map<number, StoredImage>();
@@ -189,7 +208,7 @@ export class KittyGraphics {
   /** Active placements, keyed by `imageId/placementId`. */
   private readonly placements = new Map<string, Placement>();
   /** Chunked transmissions in progress, keyed by image id. */
-  private readonly pending = new Map<string, { params: KittyCommand; chunks: string[] }>();
+  private readonly pending = new Map<string, PendingTransmit>();
   /** The placement an a=T stream will apply once its transmit phase finishes. */
   private readonly pendingPlacement = new Map<string, PlaceSpec>();
   /**
@@ -228,6 +247,11 @@ export class KittyGraphics {
     this.xterm = createXtermAdapter(term);
     this.anchor = options.anchor ?? 'scrollback';
     this.storageLimit = options.storageLimit ?? 128;
+    this.storageBytes = options.storageBytes ?? DEFAULT_STORAGE_BYTES;
+    this.maxImagePixels = options.maxImagePixels ?? DEFAULT_MAX_IMAGE_PIXELS;
+    // Room for the largest allowed image as raw RGBA, which no compressed or
+    // PNG encoding of it should exceed, plus slack for a PNG's own headers.
+    this.maxTransmitChars = base64Length(this.maxImagePixels * 4 + 64 * 1024);
     this.respond = options.respond;
 
     this.element = document.createElement('div');
@@ -500,7 +524,7 @@ export class KittyGraphics {
     this.lastTransmitKey = key;
     let entry = this.pending.get(key);
     if (!entry) {
-      entry = { params: { ...cmd }, chunks: [] };
+      entry = { params: { ...cmd }, chunks: [], length: 0, tooLarge: false };
       this.pending.set(key, entry);
       if (andPlace) {
         // The first chunk of an a=T stream carries the placement parameters.
@@ -519,11 +543,20 @@ export class KittyGraphics {
       }
     }
 
-    if (payload) entry.chunks.push(payload);
+    if (payload && !entry.tooLarge) {
+      entry.length += payload.length;
+      if (entry.length > this.maxTransmitChars) {
+        // Keep the entry so the chunks still to come land on it and are
+        // dropped, instead of starting a new image. Free what it holds.
+        entry.tooLarge = true;
+        entry.chunks = [];
+      } else {
+        entry.chunks.push(payload);
+      }
+    }
     // m=1 means more chunks follow.
     if (cmd.m === 1) return;
 
-    const fullB64 = entry.chunks.join('');
     const params = entry.params;
     this.pending.delete(key);
     const placementSpec = this.pendingPlacement.get(key);
@@ -531,6 +564,18 @@ export class KittyGraphics {
 
     this.lastTransmitKey = null;
     const imageId = Number(key.slice(2));
+
+    // Refuse before anything is decoded or allocated. A raw format declares
+    // its size in s and v, and a PNG's own header is checked after base64.
+    const declared =
+      params.s || params.v ? checkImageSize(params.s ?? 0, params.v ?? 0, this.maxImagePixels) : null;
+    if (entry.tooLarge || declared) {
+      const reason = entry.tooLarge ? `more than ${this.maxTransmitChars} bytes of data` : declared;
+      this.sendResponse({ ...params, i: params.i, I: params.I }, `EFBIG:${reason}`, imageId);
+      console.warn(`webterm: kitty image ${imageId} refused, ${reason}`);
+      return;
+    }
+    const fullB64 = entry.chunks.join('');
     // Tell the client which id its image number was given. A client that
     // addresses by number has no other way to learn it, and one that is
     // waiting on the acknowledgement will not place the image until it lands.
@@ -570,15 +615,24 @@ export class KittyGraphics {
     params: KittyCommand,
     b64: string,
   ): Promise<void> {
-    const raw = base64Decode(b64);
-    const bytes = params.o === 'z' ? await inflate(raw) : raw;
-
     const format = params.f ?? 32;
     const width = params.s ?? 0;
     const height = params.v ?? 0;
 
+    // The most an o=z stream may inflate to: the declared raw frame, or for a
+    // PNG the largest one allowed, plus room for its headers and chunks.
+    const limit =
+      format === 24 || format === 32
+        ? width * height * (format === 24 ? 3 : 4)
+        : this.maxImagePixels * 4 + 64 * 1024;
+    const raw = base64Decode(b64);
+    const bytes = params.o === 'z' ? await inflate(raw, limit) : raw;
+
     let bitmap: ImageBitmap;
     if (format === 100) {
+      const size = pngSize(bytes);
+      const refused = size ? checkImageSize(size.width, size.height, this.maxImagePixels) : null;
+      if (refused) throw new ImageTooLargeError(refused);
       bitmap = await createImageBitmap(new Blob([bytes as BlobPart], { type: 'image/png' }));
     } else if (format === 24 || format === 32) {
       if (!width || !height) throw new Error('raw pixel transmission needs s and v');
@@ -629,19 +683,32 @@ export class KittyGraphics {
     }
   }
 
-  /** Evict least recently used images past the storage limit, placements aside. */
+  /** Decoded bytes held by every stored image. */
+  private storedBytes(): number {
+    let total = 0;
+    for (const image of this.images.values()) total += image.width * image.height * 4;
+    return total;
+  }
+
+  /**
+   * Evict least recently used images past the storage limit or the byte
+   * quota, placements aside.
+   */
   private evict(): void {
-    if (this.images.size <= this.storageLimit) return;
+    let bytes = this.storedBytes();
+    const over = () => this.images.size > this.storageLimit || bytes > this.storageBytes;
+    if (!over()) return;
     const placed = new Set<number>();
     for (const placement of this.placements.values()) placed.add(placement.imageId);
     const candidates = [...this.images.entries()]
       .filter(([id]) => !placed.has(id))
       .sort((a, b) => a[1].used - b[1].used);
     for (const [id, image] of candidates) {
-      if (this.images.size <= this.storageLimit) break;
+      if (!over()) break;
       this.closeBitmap(image.bitmap);
       this.images.delete(id);
       this.pixelSizes.delete(id);
+      bytes -= image.width * image.height * 4;
     }
   }
 

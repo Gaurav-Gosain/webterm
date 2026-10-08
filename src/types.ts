@@ -74,6 +74,17 @@ export interface KittyOptions {
   anchor?: 'scrollback' | 'viewport';
   /** Decoded bitmaps retained before the least recently used is evicted. Default 128. */
   storageLimit?: number;
+  /**
+   * Decoded bytes (width x height x 4) all stored images may hold together
+   * before the least recently used unplaced one is evicted. Default 320 MiB.
+   */
+  storageBytes?: number;
+  /**
+   * The largest image, in pixels, that is decoded. A larger one is refused
+   * with an EFBIG reply, and so is a transmission longer than such an image
+   * could need. Default 4096 x 4096.
+   */
+  maxImagePixels?: number;
   /** zIndex of the overlay layer. Default 5. */
   zIndex?: number;
 }

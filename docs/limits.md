@@ -89,11 +89,13 @@ Three things are retained across a session, two of them by this package and one 
 
 | Thing | Bound | Arithmetic |
 | --- | --- | --- |
-| Decoded kitty bitmaps | `graphics.kitty.storageLimit`, default 128 | width times height times 4 bytes each, RGBA |
+| Decoded kitty bitmaps | `graphics.kitty.storageLimit`, default 128, and `graphics.kitty.storageBytes`, default 320 MiB | width times height times 4 bytes each, RGBA |
 | Batched writes | One animation frame of arrivals | A reused 64 KB scratch buffer, plus the copy of each pending chunk |
 | xterm scrollback | `scrollback`, default 5000 rows | 12 bytes per cell (three `Uint32` values), plus combined-character strings |
 
-The figures in the third column are arithmetic from the code, not measurements. A rule of thumb from them: 128 stored bitmaps at 800 by 600 is about 245 MB of pixel data, so a page that shows large images should lower `storageLimit` rather than trust the default. An image with a live placement is never an eviction candidate, so the limit is a floor on retained memory only when placements are deleted as well.
+The figures in the third column are arithmetic from the code, not measurements. A rule of thumb from them: 128 stored bitmaps at 800 by 600 is about 245 MB of pixel data, which `storageBytes` caps at 320 MiB. A page that shows large images can lower either limit. An image with a live placement is never an eviction candidate, so the limit is a floor on retained memory only when placements are deleted as well.
+
+One image is capped too. `graphics.kitty.maxImagePixels`, default 4096 by 4096, is 64 MiB decoded. The overlay refuses a larger declared size, a transmission longer than such an image needs, and an `o=z` stream that inflates past the declared size. A refused image gets an `EFBIG` reply.
 
 There is no ceiling on placements. Each is one absolutely positioned canvas in the overlay, so a sender that emits thousands without deleting them will build a DOM of thousands of canvases.
 
