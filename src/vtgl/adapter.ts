@@ -390,11 +390,22 @@ class VtglXtermRenderer {
    * which is what selection, mouse hit testing, the FitAddon and the kitty
    * overlay all read. But CharSizeService keeps its own answer, so anything
    * reading that instead sees the other number.
+   *
+   * The screen element gets the same size. xterm leaves sizing it to the
+   * renderer, as the DOM and WebGL renderers do, so without this it keeps the
+   * size the DOM renderer gave it from xterm's measurement. The canvas is
+   * absolutely positioned and does not take up room, so a host that lays out
+   * or centres the screen places it by the wrong box: the Learn tuios page
+   * drew the grid about 200 px low and lost its bottom rows.
    */
   private applyCanvasCss(): void {
     const metrics = this.vtgl.getMetrics();
-    this.canvas.style.width = `${metrics.cssCellWidth * metrics.cols}px`;
-    this.canvas.style.height = `${metrics.cssCellHeight * metrics.rows}px`;
+    const width = `${metrics.cssCellWidth * metrics.cols}px`;
+    const height = `${metrics.cssCellHeight * metrics.rows}px`;
+    this.canvas.style.width = width;
+    this.canvas.style.height = height;
+    this.screen.style.width = width;
+    this.screen.style.height = height;
   }
 
   get dimensions(): XtermRenderDimensions {
