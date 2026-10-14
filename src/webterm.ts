@@ -23,6 +23,7 @@ import {
 import { KittyGraphics } from './kitty/overlay.js';
 import { withPlaceholderFont } from './kitty/placeholder-glyph.js';
 import { KittyKeyboard } from './keyboard/keyboard.js';
+import { PasteChords } from './keyboard/paste.js';
 import { RendererManager } from './renderer.js';
 import { BufferSearch } from './search.js';
 import {
@@ -344,13 +345,17 @@ export class WebTerm {
         // protocol having to be torn down and reinstalled.
         enabled: () => !this.options.input?.readOnly,
         onKeyEvent: (event) => this.options.keyboard?.onKeyEvent?.(event) ?? true,
+        ctrlV: () => this.options.keyboard?.ctrlV ?? 'paste',
       });
-    } else if (this.options.keyboard?.onKeyEvent) {
+    } else {
       // Without the protocol nothing else has claimed xterm's single custom key
-      // handler slot, so a consumer's handler can take it directly.
-      term.attachCustomKeyEventHandler(
-        (event) => this.options.keyboard?.onKeyEvent?.(event) ?? true,
-      );
+      // handler slot, so a consumer's handler and the paste chords take it.
+      const paste = new PasteChords(() => this.options.keyboard?.ctrlV ?? 'paste');
+      term.attachCustomKeyEventHandler((event) => {
+        if (this.options.keyboard?.onKeyEvent?.(event) === false) return false;
+        if (this.options.input?.readOnly) return true;
+        return paste.handle(event) ?? true;
+      });
     }
 
     const keys = installReservedKeyCapture({

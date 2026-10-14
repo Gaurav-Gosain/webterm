@@ -146,6 +146,14 @@ export interface KeyboardOptions {
    * without displacing it.
    */
   onKeyEvent?(event: KeyboardEvent): boolean;
+  /**
+   * What plain Ctrl+V does. 'paste' (the default) lets the browser paste, as
+   * Ctrl+Shift+V, Shift+Insert and, on Apple platforms, Cmd+V always do.
+   * 'program' sends Ctrl+V to the program instead: vim's block select (which
+   * Ctrl+Q also starts) and a shell's literal-next. On Apple platforms Ctrl+V
+   * always goes to the program.
+   */
+  ctrlV?: 'paste' | 'program';
 }
 
 export interface MouseOptions {

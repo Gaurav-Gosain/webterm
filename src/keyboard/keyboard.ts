@@ -20,6 +20,7 @@ import {
   KeyboardModeStack,
   KeyboardSetMode,
 } from './protocol.js';
+import { PasteChords, type CtrlVMode } from './paste.js';
 
 export interface KittyKeyboardOptions {
   /**
@@ -44,6 +45,11 @@ export interface KittyKeyboardOptions {
    * and a consumer's handler is chained through this option.
    */
   onKeyEvent?(event: KeyboardEvent): boolean;
+  /**
+   * What plain Ctrl+V does, read on every key. Default 'paste'. See
+   * `isPasteChord`.
+   */
+  ctrlV?(): CtrlVMode;
 }
 
 /**
@@ -61,34 +67,6 @@ function param(params: CsiParams, index: number, fallback: number): number {
   // xterm reports an omitted parameter as 0, which for every parameter this
   // protocol uses means "not given" rather than a literal zero.
   return scalar === undefined || scalar === 0 ? fallback : scalar;
-}
-
-/** True on macOS and iOS, where the command key carries the paste chord. */
-function isApplePlatform(): boolean {
-  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform ?? '');
-}
-
-/**
- * Whether a key is one of the browser's paste chords: Ctrl+Shift+V and
- * Shift+Insert, and Cmd+V on Apple platforms.
- *
- * Ctrl+V is deliberately not one. It is literal-next in a shell and block
- * select in vim, and a terminal on Linux or in a browser leaves it to the
- * program.
- */
-export function isPasteChord(
-  event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>,
-  apple: boolean = isApplePlatform(),
-): boolean {
-  if (event.altKey) return false;
-  if (event.code === 'Insert') return event.shiftKey && !event.ctrlKey && !event.metaKey;
-  // The letter decides on a Latin layout, as it does for the browser's own
-  // shortcut. A layout with no Latin letters falls back to the physical key.
-  const key = (event.key ?? '').toLowerCase();
-  const isV = key === 'v' || (!/^[a-z]$/.test(key) && event.code === 'KeyV');
-  if (!isV) return false;
-  if (apple) return event.metaKey && !event.ctrlKey && !event.shiftKey;
-  return event.ctrlKey && event.shiftKey && !event.metaKey;
 }
 
 export class KittyKeyboard {
@@ -119,16 +97,12 @@ export class KittyKeyboard {
    * sequence and once as plain text.
    */
   private suppressKeypress = false;
-  /**
-   * The code of a paste chord's key while it is held, so its release is
-   * swallowed too. Under the event-types flag the release would otherwise
-   * reach the program as a key it never saw go down.
-   */
-  private pasteKeyCode: string | null = null;
+  private readonly paste: PasteChords;
 
   constructor(term: Terminal, options: KittyKeyboardOptions = {}) {
     this.term = term;
     this.options = options;
+    this.paste = new PasteChords(() => options.ctrlV?.() ?? 'paste');
     this.install();
   }
 
@@ -235,23 +209,16 @@ export class KittyKeyboard {
     // composition helper. Claiming even the keyup would starve it.
     if (isComposing(event)) return true;
 
-    const flags = this.stack.current;
-    if (flags === KeyboardFlags.NONE) return true;
     if (this.options.enabled && !this.options.enabled()) return true;
 
     // A paste chord belongs to the terminal, not the program, as it does in
-    // every native terminal that speaks this protocol. The paste is the
-    // browser's default action for the key, so the key is claimed from xterm
-    // but its default is left alone: the browser then fires a paste event on
-    // xterm's textarea, which reads clipboardData and needs no permission.
-    if (event.type === 'keydown' && isPasteChord(event)) {
-      this.pasteKeyCode = event.code;
-      return false;
-    }
-    if (event.type === 'keyup' && event.code === this.pasteKeyCode) {
-      this.pasteKeyCode = null;
-      return false;
-    }
+    // every native terminal that speaks this protocol. This runs with no
+    // flags pushed too: xterm's legacy encoding sends Ctrl+V as 0x16 and
+    // prevents the browser's paste.
+    if (this.paste.handle(event) === false) return false;
+
+    const flags = this.stack.current;
+    if (flags === KeyboardFlags.NONE) return true;
 
     const sequence = encodeKey(event as KeyInput, flags);
     if (sequence === null) {
@@ -275,7 +242,7 @@ export class KittyKeyboard {
     this.stacks.normal.reset();
     this.stacks.alternate.reset();
     this.suppressKeypress = false;
-    this.pasteKeyCode = null;
+    this.paste.reset();
   }
 
   dispose(): void {

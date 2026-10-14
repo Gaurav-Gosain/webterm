@@ -369,7 +369,7 @@ Top level: `fontFamily`, `fontSize`, `fonts`, `lineHeight`, `theme`, `cursorBlin
 | `clipboard` | `osc52` (`true`), `osc52Read` (`false`), `copyOnSelect` (`false`), `write` |
 | `unicode` | `provider` (`'graphemes'`), `overrides` (`DEFAULT_OVERRIDES`: U+200B to 0, the regional indicators and U+093F to 2) |
 | `graphics` | `kitty` (`true`), `sixel` (`false`) |
-| `keyboard` | `kitty` (`true`), `captureReservedKeys` (`true`), `reservedKeys`, `onKeyEvent` |
+| `keyboard` | `kitty` (`true`), `captureReservedKeys` (`true`), `reservedKeys`, `onKeyEvent`, `ctrlV` (`'paste'`) |
 | `mouse` | `suppressContextMenu` (`true`), `dedupeMotion` (`true`) |
 | `input` | `chunkBytes` (`65536`), `readOnly` (`false`) |
 | `syncOutput` | `timeoutMs` (`150`), the ceiling on a repaint withheld by DEC mode 2026 |
@@ -562,6 +562,15 @@ new WebTerm({
   },
 });
 ```
+
+### Paste chords
+
+Paste is the browser's. The paste chords keep their default action, so the browser fires a paste event on xterm's textarea, which reads `clipboardData`. That needs no clipboard permission and no secure context. Neither the protocol nor xterm's legacy encoding sends these chords to the program:
+
+- Ctrl+V, Ctrl+Shift+V and Shift+Insert.
+- On macOS and iOS: Cmd+V and Shift+Insert. Ctrl+V goes to the program there, because no browser on a Mac pastes on it.
+
+Ctrl+V pastes by default, as in the terminals of VS Code and Windows Terminal. In a browser tab a program's own paste key reads the clipboard of the server, not the user's. Set `keyboard.ctrlV` to `'program'` to send Ctrl+V to the program instead, for vim's block select and a shell's literal-next. Vim also starts a block select on Ctrl+Q.
 
 ## Clipboard
 

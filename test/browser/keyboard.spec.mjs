@@ -313,12 +313,10 @@ test('keys pressed while an input method is composing are left to xterm', async 
 //
 // Before this was fixed, any program that asked for the protocol (every Bubble
 // Tea v2 program does) got Ctrl+Shift+V as CSI 118;6 u, the default was
-// prevented, and paste did nothing at all.
+// prevented, and paste did nothing at all. Ctrl+V was 0x16 in every mode.
 //
-// Playwright makes Chromium run its paste command for Ctrl+Shift+V and
-// Shift+Insert, which is what makes these two end to end. Ctrl+V sends no
-// paste under Playwright in any mode, and stays the program's key: it is
-// literal-next in a shell and block select in vim.
+// Playwright makes Chromium run its paste command for Ctrl+V, Ctrl+Shift+V and
+// Shift+Insert when the default is left alone, so all three are end to end.
 test.describe('paste chords', () => {
   const PASTE = 'PASTE_ME\nline two';
   const BRACKETED = '\x1b[200~PASTE_ME\rline two\x1b[201~';
@@ -342,13 +340,51 @@ test.describe('paste chords', () => {
     }
   }
 
-  test('Ctrl+V stays the program key', async ({ page }) => {
+  /** Press Ctrl+V and report what reached the program and whether the default was prevented. */
+  async function ctrlV(page) {
+    await page.evaluate(() => {
+      window.__vPrevented = null;
+      if (window.__vWatch) return;
+      window.__vWatch = true;
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyV') setTimeout(() => { window.__vPrevented = e.defaultPrevented; }, 0);
+      }, true);
+    });
+    await page.keyboard.press('Control+v');
+    await expect.poll(() => page.evaluate(() => window.__vPrevented)).not.toBeNull();
+    return { sent: await data(page), prevented: await page.evaluate(() => window.__vPrevented) };
+  }
+
+  for (const flags of [0, 1, 31]) {
+    test(`Ctrl+V is a paste chord by default with flags ${flags}`, async ({ page }) => {
+      await armPaste(page, flags);
+      const { prevented } = await ctrlV(page);
+      expect(prevented).toBe(false);
+      await expect.poll(() => data(page)).toContain(BRACKETED);
+      const sent = await data(page);
+      expect(sent).not.toContain('\x16');
+      expect(sent).not.toContain('118;');
+    });
+  }
+
+  test('Ctrl+V is a paste chord without the protocol installed', async ({ page }) => {
+    await boot(page, '?kitty=0');
     await armPaste(page, 0);
-    await page.keyboard.press('Control+v');
-    expect(await data(page)).toBe('\x16');
+    const { prevented } = await ctrlV(page);
+    expect(prevented).toBe(false);
+    await expect.poll(() => data(page)).toBe(BRACKETED);
+  });
+
+  test('with ctrlV set to program, Ctrl+V reaches the program', async ({ page }) => {
+    await page.evaluate(() => window.term.setOptions({ keyboard: { ctrlV: 'program' } }));
+    await armPaste(page, 0);
+    expect((await ctrlV(page)).sent).toBe('\x16');
     await armPaste(page, 1);
-    await page.keyboard.press('Control+v');
-    expect(await data(page)).toBe('\x1b[118;5u');
+    expect((await ctrlV(page)).sent).toBe('\x1b[118;5u');
+    // Ctrl+Shift+V still pastes.
+    await armPaste(page, 1);
+    await page.keyboard.press('Control+Shift+V');
+    await expect.poll(() => data(page)).toContain(BRACKETED);
   });
 });
 
@@ -376,5 +412,21 @@ test.describe('paste chords on macOS', () => {
     await expect.poll(() => page.evaluate(() => window.__vPrevented)).not.toBeNull();
     expect(await data(page)).not.toContain('118;');
     expect(await page.evaluate(() => window.__vPrevented)).toBe(false);
+  });
+});
+
+test.describe('Ctrl+V on macOS', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel' });
+    });
+    await boot(page);
+  });
+
+  // No browser on a Mac pastes on Ctrl+V, so claiming it would only lose the key.
+  test('Ctrl+V stays the program key', async ({ page }) => {
+    await arm(page);
+    await page.keyboard.press('Control+v');
+    expect(await data(page)).toBe('\x16');
   });
 });
