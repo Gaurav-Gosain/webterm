@@ -72,6 +72,12 @@ export interface TerminalReportsOptions {
    * describe.
    */
   terminalName?: string;
+  /**
+   * Called once xterm has applied a DECSCUSR, RIS or DECSTR, so the cursor
+   * shape in `coreService.decPrivateModes` is the new one. The renderer addons
+   * need telling; see `RendererManager.syncCursorMode`.
+   */
+  onCursorMode?(): void;
 }
 
 export interface TerminalReports {
@@ -192,6 +198,20 @@ export function installTerminalReports(
     blink = undefined;
   };
 
+  // Each handler below runs before xterm's own and falls through to it, so the
+  // new mode is in place only once the current write has been parsed. A
+  // microtask runs after that and before the next frame. Several sequences in
+  // one write coalesce into one call.
+  let syncQueued = false;
+  const cursorModeChanged = (): void => {
+    if (!options.onCursorMode || syncQueued) return;
+    syncQueued = true;
+    queueMicrotask(() => {
+      syncQueued = false;
+      options.onCursorMode?.();
+    });
+  };
+
   const subscriptions = [
     // DECSCUSR. Returning false leaves xterm to apply it as before; this only
     // watches, so the reply can be built from the same state that is drawn.
@@ -205,16 +225,19 @@ export function installTerminalReports(
           blink = param % 2 === 1;
         }
       }
+      cursorModeChanged();
       return false;
     }),
 
     // RIS and DECSTR both clear the private modes xterm keeps DECSCUSR in.
     term.parser.registerEscHandler({ final: 'c' }, () => {
       reset();
+      cursorModeChanged();
       return false;
     }),
     term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, () => {
       reset();
+      cursorModeChanged();
       return false;
     }),
 

@@ -150,6 +150,11 @@ export function resolveFlags(cell: IBufferCell): number {
   return flags;
 }
 
+/** The vtgl shape for an xterm cursor style. An unknown style is a block. */
+function cursorShape(style: string): CursorState['shape'] {
+  return style === 'bar' || style === 'underline' || style === 'outline' ? style : 'block';
+}
+
 export interface SourceOptions {
   /** Whether the terminal currently has focus, for cursor visibility. */
   isFocused(): boolean;
@@ -157,6 +162,8 @@ export interface SourceOptions {
   isCursorHidden(): boolean;
   /** Cursor blink phase, owned by the host: vtgl runs no clock. */
   isCursorBlinkOn(): boolean;
+  /** The shape in force: the application's DECSCUSR, else the configured one. */
+  cursorStyle(): string;
 }
 
 /**
@@ -245,14 +252,21 @@ export class XtermVtSource implements VtSource {
 
   getCursor(): CursorState {
     const buffer = this.term.buffer.active;
-    const style = this.term.options.cursorStyle ?? 'block';
+    const x = buffer.cursorX;
+    // cursorY is relative to the active screen; vtgl wants absolute.
+    const y = buffer.baseY + buffer.cursorY;
+    if (this.options.isCursorHidden()) return { x, y, visible: false, shape: 'block' };
+    // Without the focus the cursor is drawn in the inactive style, steady, as
+    // xterm's own renderers draw it. The default is a hollow block.
+    if (!this.options.isFocused()) {
+      const inactive = this.term.options.cursorInactiveStyle ?? 'outline';
+      return { x, y, visible: inactive !== 'none', shape: cursorShape(inactive) };
+    }
     return {
-      x: buffer.cursorX,
-      // cursorY is relative to the active screen; vtgl wants absolute.
-      y: buffer.baseY + buffer.cursorY,
-      visible:
-        !this.options.isCursorHidden() && this.options.isFocused() && this.options.isCursorBlinkOn(),
-      shape: style === 'bar' ? 'bar' : style === 'underline' ? 'underline' : 'block',
+      x,
+      y,
+      visible: this.options.isCursorBlinkOn(),
+      shape: cursorShape(this.options.cursorStyle()),
     };
   }
 

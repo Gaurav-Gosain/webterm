@@ -46,6 +46,11 @@
 //      Deferred activation when the addon is loaded before `open()`. Same as
 //      the WebGL addon.
 //
+//   7. `terminal._core.coreService.decPrivateModes`
+//      The cursor shape and blink an application set with DECSCUSR. xterm
+//      keeps them there rather than in the options, and only its own renderers
+//      read them. Optional: without it the configured shape is drawn.
+//
 // If xterm renames any of these the addon breaks at load. Items 2 and 4 are the
 // ones with no public substitute even in principle.
 
@@ -102,6 +107,8 @@ interface XtermRenderService {
 }
 
 interface XtermCore {
+  /** Holds the cursor shape and blink an application set with DECSCUSR. */
+  coreService?: { decPrivateModes?: { cursorStyle?: string; cursorBlink?: boolean } };
   _renderService: XtermRenderService;
   _themeService: XtermThemeService;
   _createRenderer(): XtermRenderer;
@@ -269,6 +276,8 @@ class VtglXtermRenderer {
   private dpr: number;
   private focused = true;
   private cursorBlinkOn = true;
+  /** Where the cursor was and how it looked on the last frame, as one key. */
+  private cursorKey = '';
   private cursorBlinkTimer?: ReturnType<typeof setInterval>;
   private selection: {
     start?: [number, number];
@@ -316,6 +325,7 @@ class VtglXtermRenderer {
       // already exposes.
       isCursorHidden: () => !term.modes.showCursor,
       isCursorBlinkOn: () => this.cursorBlinkOn,
+      cursorStyle: () => this.cursorModes().cursorStyle ?? term.options.cursorStyle ?? 'block',
     });
 
     const rendererOptions = {
@@ -426,6 +436,7 @@ class VtglXtermRenderer {
   // --- the frame ----------------------------------------------------------
 
   renderRows(start: number, end: number): void {
+    this.restartBlinkOnChange();
     const viewportY = this.term.buffer.active.viewportY;
     this.source.markDirty(viewportY + start, viewportY + end);
     this.vtgl.render(this.source, viewportY);
@@ -566,16 +577,48 @@ class VtglXtermRenderer {
    * own inside the renderers it ships, so replacing the renderer means
    * reimplementing it, which is what this is.
    */
+  /**
+   * Show the cursor at once, and start the blink phase over, when it moves or
+   * the application changes its shape. xterm's own renderers do the same. A
+   * cursor that changed in the hidden half of a blink otherwise stayed hidden
+   * for up to one phase, and a steady shape set in that half until the next
+   * tick.
+   */
+  private restartBlinkOnChange(): void {
+    const buffer = this.term.buffer.active;
+    const modes = this.cursorModes();
+    const key = `${buffer.cursorX},${buffer.baseY + buffer.cursorY},${modes.cursorStyle ?? this.term.options.cursorStyle},${modes.cursorBlink ?? this.term.options.cursorBlink}`;
+    if (key === this.cursorKey) return;
+    this.cursorKey = key;
+    this.cursorBlinkOn = true;
+    if (this.cursorBlinkTimer) clearInterval(this.cursorBlinkTimer);
+    this.startCursorBlink();
+  }
+
   private startCursorBlink(): void {
     const blink = () => {
-      if (!this.term.options.cursorBlink) {
-        this.cursorBlinkOn = true;
+      if (!(this.cursorModes().cursorBlink ?? this.term.options.cursorBlink)) {
+        // Blink turned off mid-phase would otherwise leave the cursor hidden
+        // until something else redraws its row.
+        if (!this.cursorBlinkOn) {
+          this.cursorBlinkOn = true;
+          this.refreshCursorRow();
+        }
         return;
       }
       this.cursorBlinkOn = !this.cursorBlinkOn;
       this.refreshCursorRow();
     };
     this.cursorBlinkTimer = setInterval(blink, 600);
+  }
+
+  /**
+   * The DECSCUSR modes the application set, which xterm keeps apart from the
+   * options so DECSCUSR 0 can hand back the configured shape. Read the way
+   * xterm's own DOM renderer reads them: the mode first, the option second.
+   */
+  private cursorModes(): { cursorStyle?: string; cursorBlink?: boolean } {
+    return this.core.coreService?.decPrivateModes ?? {};
   }
 
   private refreshCursorRow(): void {

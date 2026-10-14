@@ -305,6 +305,7 @@ export class WebTerm {
         this.emitData(this.encoder.encode(data));
       },
       terminalName: this.options.reports?.terminalName,
+      onCursorMode: () => this.rendererManager?.syncCursorMode(),
     });
     this.teardown.push(() => this.reports?.dispose());
   }

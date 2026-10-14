@@ -1,5 +1,6 @@
 import type { ITerminalAddon, Terminal } from '@xterm/xterm';
 import { installRoundedCellWidth } from './cell-metrics.js';
+import { canvasCursorSync, webglCursorSync } from './cursor-mode.js';
 import type { RendererKind, RendererOptions } from './types.js';
 
 /** The renderer options with every default filled in. vtgl has no default. */
@@ -45,6 +46,8 @@ interface ContextLossAddon extends ITerminalAddon {
 export class RendererManager {
   private addon?: ITerminalAddon;
   private active: RendererKind = 'dom';
+  /** What the active addon needs after a DECSCUSR; see ./cursor-mode.ts. */
+  private cursorSync?: () => void;
   /**
    * Set by dispose(). Each renderer is a dynamic import, and the terminal can
    * be disposed while one is in flight. Loading an addon into a disposed
@@ -138,6 +141,7 @@ export class RendererManager {
             // matters more than the cleanup.
           }
           this.addon = undefined;
+          this.cursorSync = undefined;
           void this.tryCanvas().then((ok) => {
             if (!ok) this.settle('dom');
           });
@@ -146,6 +150,7 @@ export class RendererManager {
       this.term.loadAddon(addon as unknown as ITerminalAddon);
       this.addon = addon as unknown as ITerminalAddon;
       installRoundedCellWidth(addon, this.term);
+      this.cursorSync = webglCursorSync(addon);
       this.settle('webgl');
       return true;
     } catch (error) {
@@ -164,6 +169,7 @@ export class RendererManager {
       this.term.loadAddon(addon);
       this.addon = addon;
       installRoundedCellWidth(addon, this.term);
+      this.cursorSync = canvasCursorSync(addon);
       this.settle('canvas');
       return true;
     } catch (error) {
@@ -179,8 +185,18 @@ export class RendererManager {
     return renderer;
   }
 
+  /**
+   * Tell the active renderer that the application changed the cursor shape.
+   * xterm's DOM renderer and the vtgl adapter read it on every frame and need
+   * nothing.
+   */
+  syncCursorMode(): void {
+    this.cursorSync?.();
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.cursorSync = undefined;
     try {
       this.addon?.dispose();
     } catch {
