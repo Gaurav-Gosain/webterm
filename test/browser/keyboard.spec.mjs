@@ -302,3 +302,79 @@ test('keys pressed while an input method is composing are left to xterm', async 
     expect(sent[name], `${name} while composing`).not.toContain('\x1b[');
   }
 });
+
+// --- Paste chords ------------------------------------------------------------
+
+// A terminal's own paste chord is the terminal's, never the program's, and
+// every native terminal that speaks this protocol keeps it that way. Here the
+// paste is the browser's default action for the key, so the key must reach the
+// browser with its default intact: the paste event then arrives on xterm's
+// textarea, which reads clipboardData and needs no clipboard permission.
+//
+// Before this was fixed, any program that asked for the protocol (every Bubble
+// Tea v2 program does) got Ctrl+Shift+V as CSI 118;6 u, the default was
+// prevented, and paste did nothing at all.
+//
+// Playwright makes Chromium run its paste command for Ctrl+Shift+V and
+// Shift+Insert, which is what makes these two end to end. Ctrl+V sends no
+// paste under Playwright in any mode, and stays the program's key: it is
+// literal-next in a shell and block select in vim.
+test.describe('paste chords', () => {
+  const PASTE = 'PASTE_ME\nline two';
+  const BRACKETED = '\x1b[200~PASTE_ME\rline two\x1b[201~';
+
+  async function armPaste(page, flags) {
+    await page.evaluate((text) => navigator.clipboard.writeText(text), PASTE);
+    await arm(page, `\x1b[?2004h${flags ? `\x1b[>${flags}u` : ''}`);
+  }
+
+  for (const flags of [0, 1, 31]) {
+    for (const chord of ['Control+Shift+V', 'Shift+Insert']) {
+      test(`${chord} pastes with flags ${flags}`, async ({ page }) => {
+        await armPaste(page, flags);
+        await page.keyboard.press(chord);
+        await expect.poll(() => data(page)).toContain(BRACKETED);
+        // Nothing of the chord itself reaches the program: no V, no Insert.
+        const sent = await data(page);
+        expect(sent).not.toContain('118;');
+        expect(sent).not.toContain('\x1b[2;');
+      });
+    }
+  }
+
+  test('Ctrl+V stays the program key', async ({ page }) => {
+    await armPaste(page, 0);
+    await page.keyboard.press('Control+v');
+    expect(await data(page)).toBe('\x16');
+    await armPaste(page, 1);
+    await page.keyboard.press('Control+v');
+    expect(await data(page)).toBe('\x1b[118;5u');
+  });
+});
+
+test.describe('paste chords on macOS', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel' });
+    });
+    await boot(page);
+  });
+
+  // Chromium on Linux runs no paste for Meta+V, so this checks the half that
+  // is the terminal's: the chord is not encoded and its default is left alone.
+  test('Cmd+V is left to the browser under the protocol', async ({ page }) => {
+    await arm(page, '\x1b[>31u');
+    await page.evaluate(() => {
+      window.__vPrevented = null;
+      // Capture, then read after dispatch: xterm stops propagation of a key
+      // it handles, and defaultPrevented is final only once dispatch ends.
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyV') setTimeout(() => { window.__vPrevented = e.defaultPrevented; }, 0);
+      }, true);
+    });
+    await page.keyboard.press('Meta+v');
+    await expect.poll(() => page.evaluate(() => window.__vPrevented)).not.toBeNull();
+    expect(await data(page)).not.toContain('118;');
+    expect(await page.evaluate(() => window.__vPrevented)).toBe(false);
+  });
+});
