@@ -22,7 +22,9 @@ uses it.
 | `src/client.js` | Main thread: `WorkerTerm.mount()`, batched `write()`, `flush()`, `scroll()`, `dump()` |
 | `ghostty.sh` | Fetches the pinned Ghostty, applies `patches/`, builds libghostty-vt |
 | `build.sh` | Links `native/engine.c` and libghostty-vt into `dist/engine.wasm` |
-| `patches/batch-sgr.patch` | Ghostty patch from Wraith (MIT, see `NOTICE`) |
+| `patches/batch-sgr.patch` | Ghostty patch from Wraith (MIT, see `NOTICE`): one style intern per SGR sequence |
+| `patches/decode-stop-at-esc.patch` | The scalar UTF-8 decoder stops at ESC itself instead of scanning for it first |
+| `patches/page-styles-1024.patch` | Standard pages hold 1,024 styles, not 128, so colourful output does not reallocate pages |
 
 ## Build
 

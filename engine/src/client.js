@@ -26,6 +26,8 @@ export class WorkerTerm {
     this.batchLen = 0;
     this.batchIds = [];
     this.flushQueued = false;
+    this.tick = new MessageChannel();
+    this.tick.port1.onmessage = () => this.sendWrites();
     this.renders = 0;
     this.worker.onmessage = ({ data: m }) => this.onMessage(m);
     this.ready = new Promise((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
@@ -65,7 +67,10 @@ export class WorkerTerm {
     this.batch.push(bytes);
     this.batchLen += bytes.length;
     this.batchIds.push(id);
-    if (!this.flushQueued) { this.flushQueued = true; queueMicrotask(() => this.sendWrites()); }
+    // Send at the end of the current task, not the current microtask: a
+    // feeder that awaits each write wakes in its own microtask, and a
+    // microtask flush would post one message per write.
+    if (!this.flushQueued) { this.flushQueued = true; this.tick.port2.postMessage(0); }
     return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
   }
 
@@ -73,9 +78,10 @@ export class WorkerTerm {
     this.flushQueued = false;
     if (!this.batchIds.length) return;
     const out = new Uint8Array(this.batchLen);
+    const lens = new Uint32Array(this.batch.length);
     let o = 0;
-    for (const b of this.batch) { out.set(b, o); o += b.length; }
-    this.worker.postMessage({ type: 'write', bytes: out, ids: this.batchIds }, [out.buffer]);
+    this.batch.forEach((b, i) => { out.set(b, o); o += b.length; lens[i] = b.length; });
+    this.worker.postMessage({ type: 'write', bytes: out, ids: this.batchIds, lens }, [out.buffer, lens.buffer]);
     this.batch = []; this.batchLen = 0; this.batchIds = [];
   }
 

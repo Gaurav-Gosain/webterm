@@ -1,0 +1,13 @@
+diff --git a/src/terminal/page.zig b/src/terminal/page.zig
+index 82e0758..c62a113 100644
+--- a/src/terminal/page.zig
++++ b/src/terminal/page.zig
+@@ -1890,7 +1890,7 @@ pub const Page = struct {
+ pub const std_capacity: Capacity = .{
+     .cols = 215,
+     .rows = 215,
+-    .styles = 128,
++    .styles = 1024,
+     .grapheme_bytes = if (builtin.is_test) 512 else 8192,
+ };
+ 

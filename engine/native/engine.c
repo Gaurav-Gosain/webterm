@@ -419,6 +419,13 @@ EXPORT(eng_warm_ascii) uint32_t eng_warm_ascii(Eng* e) {
   return e->miss_n;
 }
 
+/* Full reset (RIS) plus a fresh render state, for the warm-up. */
+EXPORT(eng_reset) void eng_reset(Eng* e) {
+  ghostty_terminal_reset(e->t);
+  e->held = false;
+  e->need_capture = true;
+}
+
 EXPORT(eng_free) void eng_free(Eng* e) {
   if (!e) return;
   ghostty_render_state_row_cells_free(e->cells);

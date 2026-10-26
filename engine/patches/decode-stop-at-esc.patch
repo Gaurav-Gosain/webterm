@@ -1,0 +1,40 @@
+diff --git a/src/simd/vt.zig b/src/simd/vt.zig
+index ded4ab3..f417f31 100644
+--- a/src/simd/vt.zig
++++ b/src/simd/vt.zig
+@@ -41,9 +41,11 @@ fn utf8DecodeUntilControlSeqScalar(
+     input: []const u8,
+     output: []u32,
+ ) DecodeResult {
+-    // Find our escape
+-    const idx = indexOf(input, 0x1B) orelse input.len;
+-    const decode = input[0..idx];
++    // The decode region ends at the first ESC. Instead of finding it
++    // with a separate scan (a second pass over the same bytes), the
++    // ASCII path below stops on it: ESC is ASCII, and a multi-byte
++    // sequence that meets an ESC is ill-formed at that byte anyway.
++    const decode = input;
+ 
+     // Go through and decode one item at a time, following the W3C/Unicode
+     // "U+FFFD Substitution of Maximal Subparts" algorithm for ill-formed
+@@ -62,7 +64,8 @@ fn utf8DecodeUntilControlSeqScalar(
+                 const V = @Vector(vl, u8);
+                 while (decode_offset + vl <= decode.len) {
+                     const v: V = decode[decode_offset..][0..vl].*;
+-                    if (@reduce(.Or, v >= @as(V, @splat(0x80)))) break;
++                    const stop = (v >= @as(V, @splat(0x80))) | (v == @as(V, @splat(0x1B)));
++                    if (@reduce(.Or, stop)) break;
+                     const w: @Vector(vl, u32) = @intCast(v);
+                     output[decode_count..][0..vl].* = w;
+                     decode_count += vl;
+@@ -71,6 +74,10 @@ fn utf8DecodeUntilControlSeqScalar(
+             }
+             while (decode_offset < decode.len) {
+                 const b = decode[decode_offset];
++                if (b == 0x1B) return .{
++                    .consumed = decode_offset,
++                    .decoded = decode_count,
++                };
+                 if (b >= 0x80) break;
+                 output[decode_count] = b;
+                 decode_count += 1;

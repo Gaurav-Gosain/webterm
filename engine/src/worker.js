@@ -7,6 +7,9 @@
 const ATLAS_W = 2048, ATLAS_H = 1024;
 const F_DRAW = 1, F_ATLAS_RESET = 2, F_HELD = 4;
 const HOLD_LIMIT_MS = 1000;
+const ACK_BYTES = 256 * 1024;
+const FRAME_MS = 16;
+const WARM_PASSES = 12;
 
 let x; // wasm exports
 let e = 0; // engine pointer
@@ -14,9 +17,10 @@ let cols = 0, rows = 0, cw = 0, ch = 0, baseline = 0, dpr = 1;
 let gl, prog, vao, instBuf, atlasTex, flagTex, uni = {};
 let stageCtx, spr = 0, slotRows = 0;
 let fontFamily = 'monospace', fontPx = 14;
+let lastDraw = 0;
 let scheduled = false, rafId = 0, renders = 0, heldSince = 0;
 const frameMs = [];
-const T = { writeMs: 0, drawMs: 0, rasterMs: 0, msgs: 0, misses: 0 };
+const T = { warmMs: 0, writeMs: 0, drawMs: 0, rasterMs: 0, msgs: 0, misses: 0 };
 const raf = self.requestAnimationFrame ? (f) => self.requestAnimationFrame(f) : (f) => setTimeout(() => f(performance.now()), 16);
 const decoder = new TextDecoder();
 
@@ -174,34 +178,66 @@ function clearAtlas() {
 // has a slot; this draws it on a two-cell staging canvas and uploads that
 // rectangle into the slot. The browser's own font fallback picks a system
 // font for anything the web font lacks (CJK, emoji, Arabic, Devanagari).
+const STAGE_COLS = 32, STAGE_ROWS = 8; // glyphs per staging batch: 32 x 8, two cells each
+
 function raster(n) {
   const mem = u8();
   const miss = new Uint32Array(x.memory.buffer, x.eng_miss(e), n * 3);
   const arena = x.eng_arena(e);
   const ctx = stageCtx;
-  const one = new Uint8Array(1);
+  const sw = STAGE_COLS * 2 * cw, per = STAGE_COLS * STAGE_ROWS;
   let font = '';
-  for (let i = 0; i < n; i++) {
-    const slot = miss[i * 3], off = miss[i * 3 + 1], meta = miss[i * 3 + 2];
-    const len = meta & 0xffff, width = (meta >>> 16) & 0xff, style = meta >>> 24;
-    const text = decoder.decode(mem.subarray(arena + off, arena + off + len));
-    const w = cw * width;
-    const f = fontString(style);
-    if (f !== font) { ctx.font = f; font = f; }
-    ctx.clearRect(0, 0, w, ch);
-    ctx.fillText(text, 0, baseline);
-    const d = ctx.getImageData(0, 0, w, ch).data;
-    gl.activeTexture(gl.TEXTURE0);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, (slot % spr) * cw, Math.floor(slot / spr) * ch, w, ch, gl.RGBA, gl.UNSIGNED_BYTE, d);
-    // A glyph is "colour" when a covered pixel is not white: emoji keep
-    // their own colours, everything else is tinted by the cell foreground.
-    let color = 0;
-    for (let p = 0; p < d.length; p += 4) {
-      if (d[p + 3] > 40 && (Math.abs(d[p] - d[p + 1]) > 24 || Math.abs(d[p + 1] - d[p + 2]) > 24 || d[p] < 180)) { color = 1; break; }
+  const flags = new Uint8Array(1);
+  for (let base = 0; base < n; base += per) {
+    // Draw up to 256 glyphs on the staging canvas, read it back once,
+    // then upload each glyph's rectangle out of that one buffer.
+    const count = Math.min(per, n - base);
+    const usedRows = Math.ceil(count / STAGE_COLS);
+    ctx.clearRect(0, 0, sw, usedRows * ch);
+    for (let k = 0; k < count; k++) {
+      const i = base + k;
+      const off = miss[i * 3 + 1], meta = miss[i * 3 + 2];
+      const len = meta & 0xffff, style = meta >>> 24;
+      const f = fontString(style);
+      if (f !== font) { ctx.font = f; font = f; }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect((k % STAGE_COLS) * 2 * cw, Math.floor(k / STAGE_COLS) * ch, 2 * cw, ch);
+      ctx.clip();
+      ctx.fillText(decoder.decode(mem.subarray(arena + off, arena + off + len)), (k % STAGE_COLS) * 2 * cw, Math.floor(k / STAGE_COLS) * ch + baseline);
+      ctx.restore();
     }
-    one[0] = color;
-    gl.activeTexture(gl.TEXTURE1);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, slot % spr, Math.floor(slot / spr), 1, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, one);
+    const d = ctx.getImageData(0, 0, sw, usedRows * ch).data;
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, sw);
+    for (let k = 0; k < count; k++) {
+      const i = base + k;
+      const slot = miss[i * 3], width = (miss[i * 3 + 2] >>> 16) & 0xff;
+      const w = cw * width, sx = (k % STAGE_COLS) * 2 * cw, sy = Math.floor(k / STAGE_COLS) * ch;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, sx);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, sy);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, (slot % spr) * cw, Math.floor(slot / spr) * ch, w, ch, gl.RGBA, gl.UNSIGNED_BYTE, d);
+      // A glyph is "colour" when a covered pixel is not white: emoji keep
+      // their own colours, everything else is tinted by the cell foreground.
+      let color = 0;
+      for (let yy = 0; yy < ch && !color; yy++) {
+        for (let p = ((sy + yy) * sw + sx) * 4, q = p + w * 4; p < q; p += 4) {
+          if (d[p + 3] > 40 && (Math.abs(d[p] - d[p + 1]) > 24 || Math.abs(d[p + 1] - d[p + 2]) > 24 || d[p] < 180)) { color = 1; break; }
+        }
+      }
+      if (color) {
+        flags[0] = 1;
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+        gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, slot % spr, Math.floor(slot / spr), 1, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, flags);
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, sw);
+      }
+    }
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
   }
 }
 
@@ -234,6 +270,7 @@ function draw(force) {
   gl.uniform3f(uni.u_curColor, (col & 255) / 255, ((col >> 8) & 255) / 255, ((col >> 16) & 255) / 255);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
   renders++;
+  lastDraw = performance.now();
   const dt = performance.now() - t0;
   T.drawMs += dt;
   frameMs.push(dt);
@@ -266,33 +303,43 @@ function writeBytes(bytes) {
 
 // Two warm-ups before "ready", both cheap and both paid once:
 //  - rasterize printable ASCII (regular and bold) into the atlas;
-//  - run a short synthetic stream through a scratch terminal so V8 has
-//    compiled the parser's hot functions with its optimizing tier before
-//    real output arrives. Without it the first MiB parses about 2x slower.
+//  - run a short synthetic stream through the terminal so V8 has compiled
+//    the parser's hot functions with its optimizing tier before real output
+//    arrives. Without it the first MiB parses about 2x slower.
+// The stream only addresses rows that already exist (CUP, no newlines), so
+// it allocates no scrollback pages, and a full reset follows. A scratch
+// terminal cost 6 MiB of wasm memory that the idle page kept.
 function warmUp() {
   const n = x.eng_warm_ascii(e);
   if (n) raster(n);
-  const s = x.eng_new(cols, rows, 100, cw, ch, cw * 4, ch * 4);
-  if (!s) return;
   let t = '';
-  for (let i = 0; i < 400; i++) {
-    t += `\x1b[${1 + (i % rows)};1H\x1b[38;2;${i & 255};${(i * 7) & 255};90m\x1b[48;5;${i & 255}m`;
-    t += `line ${i} \u2500\u2502 \u6F22\u5B57 \x1b[1mbold\x1b[0m ${'abcdefghij'.repeat(6)}\r\n`;
+  // Mix the sequences real output leans on: sync output, CUP, SGR with
+  // 256 and 24-bit colours, wide text, box drawing and plain runs.
+  for (let i = 0; i < 300; i++) {
+    if (i % rows === 0) t += '\x1b[?2026h';
+    t += `\x1b[${1 + (i % rows)};1H\x1b[38;2;${i & 255};${(i * 7) & 255};90;48;2;${(i * 3) & 255};20;30m`;
+    t += `w${i} \u2500\u2502 \u6f22\u5b57 \x1b[1;38;5;${i & 255}mbold\x1b[0m ${'abcdefghij'.repeat(Math.max(1, Math.floor(cols / 20)))}\x1b[K`;
+    if (i % rows === rows - 1) t += '\x1b[?2026l';
   }
+  t += '\x1b[?2026l\x1b[0m';
   const b = new TextEncoder().encode(t);
-  const inPtr = x.eng_input(s);
-  for (let k = 0; k < 8; k++) {
-    u8().set(b.subarray(0, Math.min(b.length, x.eng_input_cap())), inPtr);
-    x.eng_write_input(s, Math.min(b.length, x.eng_input_cap()));
-    x.eng_frame(s, 0);
+  const inPtr = x.eng_input(e), cap = x.eng_input_cap();
+  for (let k = 0; k < WARM_PASSES; k++) {
+    for (let o = 0; o < b.length; o += cap) {
+      const len = Math.min(cap, b.length - o);
+      u8().set(b.subarray(o, o + len), inPtr);
+      x.eng_write_input(e, len);
+    }
   }
-  x.eng_free(s);
+  x.eng_reset(e);
 }
 
 function warmFallbackFonts() {
   const c = new OffscreenCanvas(4 * fontPx, 2 * fontPx).getContext('2d');
-  c.font = fontString(0);
-  for (const t of ['\u{1F642}', '\u{1F1EF}\u{1F1F5}', '\u2800\u28FF', '\u6F22\uD55C', '\u0645\u0928']) c.fillText(t, 0, fontPx);
+  for (const style of [0, 1]) {
+    c.font = fontString(style);
+    for (const t of ['\u{1F642}', '\u{1F1EF}\u{1F1F5}', '\u2800\u28FF', '\u6F22\uD55C', '\u0645\u0928']) c.fillText(t, 0, fontPx);
+  }
 }
 
 async function loadFonts(fonts) {
@@ -331,22 +378,46 @@ self.onmessage = async ({ data: m }) => {
         if (m.theme) x.eng_theme(e, m.theme[0], m.theme[1], m.theme[2]);
         spr = x.eng_slots_per_row(e);
         slotRows = Math.floor(ATLAS_H / ch);
-        stageCtx = new OffscreenCanvas(2 * cw, ch).getContext('2d', { willReadFrequently: true });
+        stageCtx = new OffscreenCanvas(STAGE_COLS * 2 * cw, STAGE_ROWS * ch).getContext('2d', { willReadFrequently: true });
         stageCtx.fillStyle = '#fff';
         stageCtx.textBaseline = 'alphabetic';
         m.canvas.width = cols * cw;
         m.canvas.height = rows * ch;
         setupGL(m.canvas);
+        const tw = performance.now();
         warmUp();
+        T.warmMs = performance.now() - tw;
         draw(true);
         self.postMessage({ type: 'ready', cw, ch, renderer: 'worker-webgl2' });
         break;
       }
-      case 'write':
-        writeBytes(m.bytes);
-        schedule();
-        self.postMessage({ type: 'written', ids: m.ids });
+      case 'write': {
+        // Acknowledge writes as their bytes are parsed, about every
+        // 256 KiB, not once per batch. The sender refills its window while
+        // the rest of the batch parses, so the worker never idles waiting
+        // for the next message.
+        let off = 0, from = 0, pending = 0;
+        for (let i = 0; i < m.ids.length; i++) {
+          const n = m.lens ? m.lens[i] : m.bytes.length;
+          writeBytes(m.bytes.subarray(off, off + n));
+          off += n;
+          pending += n;
+          if (pending >= ACK_BYTES && i + 1 < m.ids.length) {
+            self.postMessage({ type: 'written', ids: m.ids.slice(from, i + 1) });
+            from = i + 1;
+            pending = 0;
+          }
+        }
+        self.postMessage({ type: 'written', ids: m.ids.slice(from) });
+        // A flood of write messages can keep the worker busy past its
+        // animation frames. Draw here when a frame is overdue, so the screen
+        // keeps moving at about 60 fps however fast the bytes arrive.
+        if (performance.now() - lastDraw > FRAME_MS) {
+          if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
+          draw(false);
+        } else schedule();
         break;
+      }
       case 'scroll':
         x.eng_scroll(e, m.delta);
         schedule();
