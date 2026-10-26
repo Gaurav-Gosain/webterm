@@ -27,6 +27,7 @@ uses it.
 | `patches/kitty-freestanding.patch` | Kitty graphics in the freestanding wasm build, direct transmission only (from Wraith, see `NOTICE`) |
 | `native/sixel.c` | Streaming sixel decoder; images go to Ghostty as kitty graphics |
 | `src/net-worker.js`, `src/transport.js` | The connection: sip's protocol over WebSocket or WebTransport, in its own worker |
+| `src/transports.js` | webterm's WebSocket and WebTransport transports, `fallback` and `reconnecting`, generated from `../src/transport` by `scripts/gen-transports.mjs`. `connectSip` runs them in the network worker, so sip connects and reconnects as its xterm.js client does |
 | `src/input.js` | DOM keyboard, IME, paste, focus, pointer and wheel listeners |
 | `patches/page-styles-1024.patch` | Standard pages hold 1,024 styles, not 128, so colourful output does not reallocate pages |
 

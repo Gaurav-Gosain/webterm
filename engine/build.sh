@@ -14,6 +14,7 @@ wuffs=$(dirname "$(ls "$GHOSTTY_SRC"/zig-pkg/*/release/c/wuffs-v0.4.c | head -1)
 mkdir -p "$out"
 node "$here/scripts/gen-diacritics.mjs" "$GHOSTTY_SRC/src/terminal/kitty/graphics_unicode.zig" "$here/native/diacritics.h"
 node "$here/scripts/gen-keys.mjs" "$GHOSTTY_SRC/include/ghostty/vt/key/event.h" "$here/src/keys.js"
+node --no-warnings "$here/scripts/gen-transports.mjs"
 "$ZIG" cc -target wasm32-freestanding -O3 -mbulk-memory -msimd128 -nostdlib \
   -I"$GHOSTTY_SRC/include" \
   -DENGINE_PNG -I"$wuffs" -I"$GHOSTTY_SRC/pkg/wuffs/include" \

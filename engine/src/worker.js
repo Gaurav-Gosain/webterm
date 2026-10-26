@@ -1254,11 +1254,13 @@ self.onmessage = async ({ data: m }) => {
       }
       case 'net': {
         // The socket lives in the network worker; this port carries its
-        // output here and our input there.
-        net = m.port;
-        net.onmessage = ({ data: d }) => {
-          if (d.type === 'output') { writeBytes(d.bytes); net.postMessage({ type: 'ack' }); afterOutput(); }
-          else if (d.type === 'open') net.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
+        // output here and our input there. With viaPage (sip's connection)
+        // input and resizes go to the page, which frames and sends them.
+        const port = m.port;
+        net = m.viaPage ? null : port;
+        port.onmessage = ({ data: d }) => {
+          if (d.type === 'output') { writeBytes(d.bytes); port.postMessage({ type: 'ack' }); afterOutput(); }
+          else if (d.type === 'open') port.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
           else if (d.type === 'options') { readOnly = !!d.options.readOnly; self.postMessage(d); }
           else self.postMessage(d); // title, closed
         };
