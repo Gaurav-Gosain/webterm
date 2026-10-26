@@ -60,7 +60,13 @@ export class EngineWebTerm {
       },
       onTitle: (t) => this.emit('title', t),
       onBell: () => this.emit('bell'),
-      onKey: (ev) => (this.keyHandler ? this.keyHandler(ev) : true),
+      // webterm's keyboard.onKeyEvent and xterm's custom key handler both get
+      // a say before the engine encodes a key; false keeps it from the program.
+      onKey: (ev) => {
+        const kb = this.options.keyboard?.onKeyEvent;
+        if (kb && kb(ev) === false) return false;
+        return this.keyHandler ? this.keyHandler(ev) : true;
+      },
       onTap: () => this.options.onTap?.(),
       onPointerShape: (shape) => {
         // Same custom property sip's own pointer-shape code sets, so the page's
