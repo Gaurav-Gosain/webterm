@@ -6,9 +6,28 @@
 import { attachInput } from './input.js';
 
 export class WorkerTerm {
+  /**
+   * Whether this browser can run the engine at all. A page that gets
+   * false (or a rejected mount with err.code) keeps its other client.
+   */
+  static supported() {
+    const reasons = [];
+    if (typeof WebAssembly !== 'object') reasons.push('no-wasm');
+    if (typeof Worker !== 'function') reasons.push('no-worker');
+    if (typeof OffscreenCanvas !== 'function' || !('transferControlToOffscreen' in HTMLCanvasElement.prototype)) reasons.push('no-offscreen-canvas');
+    return { ok: reasons.length === 0, reasons };
+  }
+
   static async mount(host, opts = {}) {
+    const s = WorkerTerm.supported();
+    if (!s.ok) throw Object.assign(new Error(`worker engine unsupported: ${s.reasons.join(', ')}`), { code: s.reasons[0] });
     const t = new WorkerTerm(host, opts);
-    await t.ready;
+    try {
+      await t.ready;
+    } catch (err) {
+      t.dispose();
+      throw err;
+    }
     return t;
   }
 
@@ -32,11 +51,12 @@ export class WorkerTerm {
     this.tick.port1.onmessage = () => this.sendWrites();
     this.renders = 0;
     this.worker.onmessage = ({ data: m }) => this.onMessage(m);
+    this.worker.onerror = (ev) => { ev.preventDefault?.(); this.readyReject?.(Object.assign(new Error(`worker engine failed to start: ${ev.message || 'load error'}`), { code: 'worker-failed' })); };
     this.ready = new Promise((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
     this.worker.postMessage({
       type: 'init', canvas: off, cols: this.cols, rows: this.rows, dpr: this.dpr,
       scrollback: opts.scrollback ?? 10000, fontFamily: opts.fontFamily, fontSize: opts.fontSize ?? 14,
-      fonts: opts.fonts, theme: opts.theme, wasmUrl: String(opts.wasmUrl ?? new URL('../dist/engine.wasm', import.meta.url)),
+      fonts: opts.fonts, theme: opts.theme, renderer: opts.renderer, debugNoWebGL2: !!opts.debugNoWebGL2, wasmUrl: String(opts.wasmUrl ?? new URL('../dist/engine.wasm', import.meta.url)),
     }, [off]);
   }
 
@@ -96,7 +116,7 @@ export class WorkerTerm {
       const p = this.pending.get(m.id); this.pending.delete(m.id);
       if (m.error) p?.reject(new Error(m.error)); else p?.resolve(m.value);
     } else if (m.type === 'error') {
-      if (this.readyReject) this.readyReject(new Error(m.error));
+      if (this.readyReject) this.readyReject(Object.assign(new Error(m.error), { code: m.code || 'engine-error' }));
       console.error(m.error);
     }
   }

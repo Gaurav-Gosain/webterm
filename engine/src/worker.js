@@ -172,7 +172,7 @@ function measure() {
 
 function setupGL(canvas) {
   gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
-  if (!gl) throw new Error('WebGL2 is not available in the worker');
+  if (!gl) return false;
   prog = gl.createProgram();
   gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
   gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
@@ -231,7 +231,25 @@ function setupGL(canvas) {
   }
   gl.bindVertexArray(vao);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  return true;
 }
+
+// A lost WebGL context (GPU reset, driver update, too many contexts) comes
+// back by rebuilding every GL object and redrawing from wasm, which still
+// holds the whole grid. The glyph atlas is rasterized again.
+function watchContext(canvas) {
+  canvas.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); contextLost = true; });
+  canvas.addEventListener('webglcontextrestored', () => {
+    contextLost = false;
+    images.clear();
+    setupGL(canvas);
+    x.eng_set_cell(e, cw, ch, ATLAS_W, ATLAS_H);
+    warmAscii();
+    draw(true);
+    self.postMessage({ type: 'contextRestored' });
+  });
+}
+let contextLost = false;
 
 // ---- images -------------------------------------------------------------
 const images = new Map(); // id -> { tex, gen, w, h, seen }
@@ -311,6 +329,7 @@ function evictImages() {
 }
 
 function clearAtlas() {
+  if (mode2d) { slot2d.clear(); return; }
   // Glyph pixels need no clearing: every raster uploads its whole slot.
   gl.activeTexture(gl.TEXTURE1);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, spr, slotRows, gl.RED_INTEGER, gl.UNSIGNED_BYTE, new Uint8Array(spr * slotRows));
@@ -323,6 +342,7 @@ function clearAtlas() {
 const STAGE_COLS = 32, STAGE_ROWS = 8; // glyphs per staging batch: 32 x 8, two cells each
 
 function raster(n) {
+  if (mode2d) return note2d(n);
   const mem = u8();
   const miss = new Uint32Array(x.memory.buffer, x.eng_miss(e), n * 3);
   const arena = x.eng_arena(e);
@@ -383,6 +403,133 @@ function raster(n) {
   }
 }
 
+// ---- Canvas2D rung ----------------------------------------------------------
+// Used when the worker has no WebGL2 (or when asked). The same wasm frame
+// builder and instance buffer; this paints dirty rows with fillText. Slower
+// per cell than the instanced draw, still entirely off the main thread.
+let mode2d = false, ctx2d = null, prevCur2d = [-1, -1];
+const slot2d = new Map(); // slot -> { text, style, width }
+const images2d = new Map(); // id -> { canvas, gen, w, h }
+
+function note2d(n) {
+  const mem = u8();
+  const miss = new Uint32Array(x.memory.buffer, x.eng_miss(e), n * 3);
+  const arena = x.eng_arena(e);
+  for (let i = 0; i < n; i++) {
+    const slot = miss[i * 3], off = miss[i * 3 + 1], meta = miss[i * 3 + 2];
+    slot2d.set(slot, { text: decoder.decode(mem.subarray(arena + off, arena + off + (meta & 0xffff))), width: (meta >>> 16) & 0xff, style: meta >>> 24 });
+  }
+}
+
+const css = (c) => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;
+
+function image2d(id) {
+  const info = x.eng_image(e, id);
+  if (!info) return null;
+  const [w, h, fmt, len, ptr, gen] = new Uint32Array(x.memory.buffer, info, 6);
+  let img = images2d.get(id);
+  if (img && img.gen === gen) return img;
+  const src = new Uint8Array(x.memory.buffer, ptr, len), rgba = new Uint8ClampedArray(w * h * 4);
+  const step = fmt === 0 ? 3 : fmt === 3 ? 2 : fmt === 4 ? 1 : 4;
+  for (let i = 0; i < w * h; i++) {
+    if (step >= 3) { rgba[i * 4] = src[i * step]; rgba[i * 4 + 1] = src[i * step + 1]; rgba[i * 4 + 2] = src[i * step + 2]; rgba[i * 4 + 3] = step === 4 ? src[i * 4 + 3] : 255; }
+    else { rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = src[i * step]; rgba[i * 4 + 3] = step === 2 ? src[i * 2 + 1] : 255; }
+  }
+  const c = new OffscreenCanvas(w, h);
+  c.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+  img = { canvas: c, gen, w, h };
+  images2d.set(id, img);
+  T.imageUploads = (T.imageUploads || 0) + 1;
+  return img;
+}
+
+function images2dLayer(gfx, layer) {
+  for (const [id, entries] of gfx) {
+    const img = image2d(id);
+    if (!img) continue;
+    for (const en of entries) if (en.layer === layer) ctx2d.drawImage(img.canvas, en.sx, en.sy, en.sw, en.sh, en.dx, en.dy, en.dw, en.dh);
+  }
+}
+
+function paintRow2d(y, inst, cur, curColor, pass) {
+  const row = inst.subarray(y * cols * 3, (y + 1) * cols * 3);
+  const top = y * ch;
+  if (pass !== 2) {
+    // Backgrounds, in runs of one colour.
+    for (let x0 = 0; x0 < cols;) {
+      const bg = row[x0 * 3 + 2];
+      let x1 = x0 + 1;
+      while (x1 < cols && row[x1 * 3 + 2] === bg) x1++;
+      ctx2d.fillStyle = css(bg);
+      ctx2d.fillRect(x0 * cw, top, (x1 - x0) * cw, ch);
+      x0 = x1;
+    }
+    if (cur[2] && cur[1] === y && cur[3] === 1) { ctx2d.fillStyle = css(curColor); ctx2d.fillRect(cur[0] * cw, top, cw, ch); }
+  }
+  if (pass === 1) return;
+  let font = '';
+  for (let xx = 0; xx < cols; xx++) {
+    const w0 = row[xx * 3], slot = w0 & 0xfffff;
+    const isCur = cur[2] && cur[1] === y && cur[0] === xx;
+    const fg = isCur && cur[3] === 1 ? row[xx * 3 + 2] : row[xx * 3 + 1];
+    ctx2d.fillStyle = css(fg);
+    if (slot) {
+      const g = slot2d.get(slot);
+      if (g) {
+        const f = fontString(g.style);
+        if (f !== font) { ctx2d.font = f; font = f; }
+        ctx2d.globalAlpha = w0 & (1 << 27) ? 0.5 : 1;
+        ctx2d.fillText(g.text, xx * cw, top + baseline);
+        ctx2d.globalAlpha = 1;
+      }
+    }
+    const ul = (w0 >>> 22) & 7, ulH = Math.max(1, Math.round(dpr)), ulY = Math.min(ch - ulH, baseline + ulH);
+    const isLink = hover && hover.row === y && xx >= hover.x0 && xx <= hover.x1;
+    if (ul || isLink) ctx2d.fillRect(xx * cw, top + ulY, cw, ulH);
+    if (ul === 2) ctx2d.fillRect(xx * cw, top + ulY + 2 * ulH, cw, ulH);
+    if (w0 & (1 << 25)) ctx2d.fillRect(xx * cw, top + (ch >> 1), cw, ulH);
+    if (w0 & (1 << 26)) ctx2d.fillRect(xx * cw, top, cw, ulH);
+    if (isCur && cur[3] !== 1) {
+      ctx2d.fillStyle = css(curColor);
+      if (cur[3] === 0) ctx2d.fillRect(xx * cw, top, 2, ch);
+      else if (cur[3] === 2) ctx2d.fillRect(xx * cw, top + ch - 2, cw, 2);
+      else ctx2d.strokeRect(xx * cw + 0.5, top + 0.5, cw - 1, ch - 1);
+    }
+  }
+}
+
+function draw2d(force, t0) {
+  const mem = u8();
+  const dirty = x.eng_row_dirty(e);
+  const inst = new Uint32Array(x.memory.buffer, x.eng_inst(e), cols * rows * 3);
+  const cur = new Uint32Array(x.memory.buffer, x.eng_cursor(e), 6).slice();
+  const curColor = new Uint32Array(x.memory.buffer, x.eng_colors(e), 3)[2];
+  frameNo++;
+  const gfx = gfxList();
+  const paint = new Set();
+  for (let y = 0; y < rows; y++) if (force || gfx || mem[dirty + y]) paint.add(y);
+  // The cursor's old and new rows, and the hovered link's row.
+  if (prevCur2d[1] >= 0 && prevCur2d[1] < rows) paint.add(prevCur2d[1]);
+  if (cur[1] < rows) paint.add(cur[1]);
+  if (hover) paint.add(hover.row);
+  if (gfx) {
+    for (const y of paint) paintRow2d(y, inst, cur, curColor, 1);
+    images2dLayer(gfx, 1); images2dLayer(gfx, 2);
+    for (const y of paint) paintRow2d(y, inst, cur, curColor, 2);
+    images2dLayer(gfx, 3);
+  } else for (const y of paint) paintRow2d(y, inst, cur, curColor, 0);
+  prevCur2d = [cur[0], cur[1]];
+  renders++;
+  lastDraw = performance.now();
+  if (cur[0] !== lastCur[0] || cur[1] !== lastCur[1] || cur[2] !== lastCur[2]) { lastCur = [cur[0], cur[1], cur[2]]; postCursor(); }
+  if (observe) self.postMessage({ type: 'frame', n: renders, t: performance.timeOrigin + lastDraw, cx: cur[0], cy: cur[1] });
+  const dt = performance.now() - t0;
+  T.drawMs += dt;
+  frameMs.push(dt);
+  if (frameMs.length > 4096) frameMs.splice(0, 2048);
+  return true;
+}
+
 function draw(force) {
   const t0 = performance.now();
   const f = x.eng_frame(e, force ? 1 : 0);
@@ -394,6 +541,8 @@ function draw(force) {
   const n = x.eng_miss_n(e);
   if (n) { const tr = performance.now(); raster(n); T.rasterMs += performance.now() - tr; T.misses += n; }
   if (!(f & F_DRAW) && !force) return false;
+  if (mode2d) return draw2d(force, t0);
+  if (contextLost) return false;
   // Upload dirty row ranges directly from wasm memory: one bufferSubData
   // per contiguous run, no intermediate copy.
   const mem = u8();
@@ -612,6 +761,15 @@ function stage(text) {
 function resizeGrid(c, r) {
   if (x.eng_resize(e, c, r)) return false;
   cols = c; rows = r;
+  if (mode2d) {
+    ctx2d.canvas.width = cols * cw;
+    ctx2d.canvas.height = rows * ch;
+    ctx2d.textBaseline = 'alphabetic';
+    draw(true);
+    conn?.resize(cols, rows, cols * cw, rows * ch);
+    net?.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
+    return true;
+  }
   gl.canvas.width = cols * cw;
   gl.canvas.height = rows * ch;
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
@@ -666,7 +824,7 @@ function setHover(h) {
   const old = hover ? `${hover.uri}|${hover.row}|${hover.x0}|${hover.x1}` : '';
   if (key === old) return;
   hover = h;
-  gl.uniform4i(uni.u_link, h ? h.row : 0, h ? h.x0 : 0, h ? h.x1 : 0, h ? 1 : 0);
+  if (!mode2d) gl.uniform4i(uni.u_link, h ? h.row : 0, h ? h.x0 : 0, h ? h.x1 : 0, h ? 1 : 0);
   self.postMessage({ type: 'hover', uri: h ? h.uri : null });
   draw(true);
 }
@@ -738,6 +896,16 @@ async function applyFont(m) {
   stageCtx = new OffscreenCanvas(STAGE_COLS * 2 * cw, STAGE_ROWS * ch).getContext('2d', { willReadFrequently: true });
   stageCtx.fillStyle = '#fff';
   stageCtx.textBaseline = 'alphabetic';
+  if (mode2d) {
+    slot2d.clear();
+    ctx2d.canvas.width = cols * cw;
+    ctx2d.canvas.height = rows * ch;
+    ctx2d.textBaseline = 'alphabetic';
+    warmAscii();
+    draw(true);
+    self.postMessage({ type: 'metrics', cw, ch });
+    return;
+  }
   gl.deleteTexture(flagTex);
   flagTex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE1);
@@ -792,12 +960,23 @@ self.onmessage = async ({ data: m }) => {
         stageCtx.textBaseline = 'alphabetic';
         m.canvas.width = cols * cw;
         m.canvas.height = rows * ch;
-        setupGL(m.canvas);
+        // The rungs: WebGL2 in this worker, else Canvas2D in this worker.
+        let renderer = 'worker-webgl2';
+        // debugNoWebGL2 lets a test take the automatic path a browser without
+        // WebGL2 in workers takes; Chromium's flags do not reach worker contexts.
+        if (m.renderer !== 'canvas2d' && !m.debugNoWebGL2 && setupGL(m.canvas)) watchContext(m.canvas);
+        else {
+          ctx2d = m.canvas.getContext('2d', { alpha: false });
+          if (!ctx2d) throw Object.assign(new Error('Neither WebGL2 nor Canvas2D is available in the worker'), { code: 'no-canvas' });
+          mode2d = true;
+          renderer = 'worker-canvas2d';
+          ctx2d.textBaseline = 'alphabetic';
+        }
         const tw = performance.now();
         warmUp();
         T.warmMs = performance.now() - tw;
         draw(true);
-        self.postMessage({ type: 'ready', cw, ch, renderer: 'worker-webgl2' });
+        self.postMessage({ type: 'ready', cw, ch, renderer });
         break;
       }
       case 'write': {
@@ -955,6 +1134,13 @@ self.onmessage = async ({ data: m }) => {
         self.postMessage({ type: 'result', id: m.id, value: st });
         break;
       }
+      case 'debugLoseContext': {
+        // For tests: lose the WebGL context and get it back.
+        const ext = gl && gl.getExtension('WEBGL_lose_context');
+        if (ext) { ext.loseContext(); setTimeout(() => ext.restoreContext(), m.ms ?? 100); }
+        self.postMessage({ type: 'result', id: m.id, value: !!ext });
+        break;
+      }
       case 'setOptions': {
         if (m.theme) applyTheme(m.theme);
         if (m.cursorStyle || 'cursorBlink' in m) x.eng_cursor_default(e, { bar: 0, block: 1, underline: 2, outline: 3 }[m.cursorStyle || 'block'] ?? 1, m.cursorBlink ? 1 : 0);
@@ -1016,7 +1202,7 @@ self.onmessage = async ({ data: m }) => {
       case 'flush':
         if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
         draw(true);
-        gl.finish();
+        if (!mode2d) gl.finish();
         self.postMessage({ type: 'result', id: m.id, value: { renders } });
         break;
       case 'stats':
@@ -1030,6 +1216,6 @@ self.onmessage = async ({ data: m }) => {
       }
     }
   } catch (err) {
-    self.postMessage({ type: m.id !== undefined ? 'result' : 'error', id: m.id, error: String(err && err.stack || err) });
+    self.postMessage({ type: m.id !== undefined ? 'result' : 'error', id: m.id, error: String(err && err.stack || err), code: err && err.code });
   }
 };
