@@ -953,7 +953,9 @@ static void highlight_matches(Eng* e) {
     paint_range(e, &sel.start, &sel.end, e->hl_sel_fg, e->hl_sel_bg);
 }
 
-static uint32_t search_out[3]; /* status, total, selected index (UINT32_MAX for none) */
+/* status, total, selected index (UINT32_MAX for none), and the selected
+ * match's start as screen row (0 = oldest line kept) and column */
+static uint32_t search_out[5];
 static void search_report(Eng* e) {
   GhosttySearchStatus st = GHOSTTY_SEARCH_STATUS_COMPLETE;
   size_t total = 0, idx = 0;
@@ -963,6 +965,17 @@ static void search_report(Eng* e) {
   search_out[0] = st;
   search_out[1] = total > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)total;
   search_out[2] = has ? (uint32_t)idx : 0xFFFFFFFFu;
+  search_out[3] = search_out[4] = 0xFFFFFFFFu;
+  GhosttySelection sel = GHOSTTY_INIT_SIZED(GhosttySelection);
+  if (has && ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_SELECTED_MATCH, &sel) == GHOSTTY_SUCCESS) {
+    GhosttyPointCoordinate a, b;
+    if (!ghostty_terminal_point_from_grid_ref(e->t, &sel.start, GHOSTTY_POINT_TAG_SCREEN, &a) &&
+        !ghostty_terminal_point_from_grid_ref(e->t, &sel.end, GHOSTTY_POINT_TAG_SCREEN, &b)) {
+      bool before = a.y < b.y || (a.y == b.y && a.x <= b.x);
+      search_out[3] = before ? a.y : b.y;
+      search_out[4] = before ? a.x : b.x;
+    }
+  }
 }
 
 /* Set the needle (the input buffer, len bytes; 0 closes the search). */
