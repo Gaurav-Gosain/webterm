@@ -65,6 +65,13 @@ export class WorkerTerm {
     if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
     if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
     if (m.type === 'bell') { this.opts.onBell?.(); return; }
+    if (m.type === 'pointerShape') {
+      // null means the program reset it: the page's own default applies.
+      this.pointerShape = m.shape;
+      if (this.opts.onPointerShape) this.opts.onPointerShape(m.shape);
+      else this.canvas.style.cursor = m.shape ?? '';
+      return;
+    }
     if (m.type === 'metrics') {
       this.cw = m.cw; this.ch = m.ch;
       this.canvas.style.width = `${(this.cols * m.cw) / this.dpr}px`;

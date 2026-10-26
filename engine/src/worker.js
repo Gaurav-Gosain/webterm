@@ -155,8 +155,11 @@ function compile(type, src) {
   return s;
 }
 
+// fontFamily may be one name or a CSS family list ("'A', 'B', monospace").
+const familyList = () => (/[,'"]/.test(fontFamily) ? fontFamily : `"${fontFamily}"`) + (/monospace\s*$/.test(fontFamily) ? '' : ', monospace');
+const firstFamily = () => fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
 function fontString(style) {
-  return `${style & 2 ? 'italic ' : ''}${style & 1 ? 'bold ' : ''}${fontPx}px "${fontFamily}", monospace`;
+  return `${style & 2 ? 'italic ' : ''}${style & 1 ? 'bold ' : ''}${fontPx}px ${familyList()}`;
 }
 
 function measure() {
@@ -835,7 +838,7 @@ function warmFallbackFonts() {
 async function loadFonts(fonts) {
   if (!fonts?.length || !self.FontFace) return;
   await Promise.all(fonts.map(async (f) => {
-    const face = new FontFace(fontFamily, `url(${f.url})`, { weight: f.weight ?? '400', style: f.style ?? 'normal' });
+    const face = new FontFace(f.family || firstFamily(), `url(${f.url})`, { weight: f.weight ?? '400', style: f.style ?? 'normal' });
     await face.load();
     self.fonts.add(face);
   }));
@@ -890,9 +893,14 @@ function postSelection() {
 }
 
 // After output was parsed: replies out, and a frame if one is overdue.
+// OSC 22 pointer shapes, by GhosttyMouseShape value (W3C cursor names).
+const SHAPES = ['default', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text', 'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out'];
+let lastShape = 0;
 function afterOutput() {
   flushOut();
   searchAfterOutput();
+  const shape = x.eng_mouse_shape(e);
+  if (shape !== lastShape) { lastShape = shape; self.postMessage({ type: 'pointerShape', shape: shape ? SHAPES[shape] ?? 'default' : null }); }
   if (performance.now() - lastDraw > FRAME_MS) {
     if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
     draw(false);

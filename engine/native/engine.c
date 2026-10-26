@@ -1671,6 +1671,13 @@ EXPORT(eng_clear_scrollback) void eng_clear_scrollback(Eng* e) {
   ghostty_terminal_vt_write(e->t, buf, o);
 }
 
+/* The pointer shape a program asked for with OSC 22 (GhosttyMouseShape). */
+EXPORT(eng_mouse_shape) uint32_t eng_mouse_shape(Eng* e) {
+  GhosttyMouseShape shape = GHOSTTY_MOUSE_SHAPE_DEFAULT;
+  ghostty_terminal_get(e->t, GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE, &shape);
+  return (uint32_t)shape;
+}
+
 /* Full reset (RIS) plus a fresh render state, for the warm-up. */
 EXPORT(eng_reset) void eng_reset(Eng* e) {
   ghostty_terminal_reset(e->t);
