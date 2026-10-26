@@ -797,6 +797,17 @@ self.onmessage = async ({ data: m }) => {
         schedule();
         break;
       }
+      case 'send': {
+        // Raw bytes from the page, straight to the program.
+        const b = m.bytes;
+        if (readOnly) break;
+        if (net) net.postMessage({ type: 'input', bytes: b }, [b.buffer]);
+        else if (conn) conn.input(b);
+        else self.postMessage({ type: 'data', bytes: b }, [b.buffer]);
+        x.eng_scroll(e, 1 << 30);
+        schedule();
+        break;
+      }
       case 'text':
         x.eng_text(e, stage(m.text));
         flushOut();

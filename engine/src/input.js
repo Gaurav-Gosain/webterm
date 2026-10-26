@@ -67,9 +67,11 @@ export function attachInput(host, canvas, post, opts = {}) {
     // Keep browser and OS shortcuts that use the platform key.
     if (ev.metaKey) return;
     ev.preventDefault();
-    const text = [...ev.key].length === 1 ? ev.key : '';
+    // A page with sticky modifiers (sip's phone key bar) folds them in here.
+    const k = opts.keyFilter ? opts.keyFilter(ev) : ev;
+    const text = [...k.key].length === 1 ? k.key : '';
     held.add(ev.code);
-    post({ type: 'key', code: ev.code, mods: mods(ev), action: ev.repeat ? ACTION.repeat : ACTION.press, text, unshifted: unshifted(ev, text), t: ev.timeStamp });
+    post({ type: 'key', code: k.code, mods: mods(k), action: ev.repeat ? ACTION.repeat : ACTION.press, text, unshifted: unshifted(k, text), t: ev.timeStamp });
   });
   on(ta, 'keyup', (ev) => {
     if (!held.delete(ev.code)) return;
@@ -84,7 +86,7 @@ export function attachInput(host, canvas, post, opts = {}) {
   // Soft keyboards and some IMEs insert text without a usable keydown.
   on(ta, 'input', (ev) => {
     if (composing || ev.inputType === 'insertCompositionText' || ev.inputType === 'insertFromComposition') return;
-    if (ev.data) post({ type: 'text', text: ev.data });
+    if (ev.data) post({ type: 'text', text: opts.textFilter ? opts.textFilter(ev.data) : ev.data });
     ta.value = '';
   });
   on(ta, 'paste', (ev) => {
@@ -117,6 +119,55 @@ export function attachInput(host, canvas, post, opts = {}) {
   // The mousedown default would move focus to the body after our focus()
   // call, and keys would stop reaching the textarea.
   on(canvas, 'mousedown', (ev) => ev.preventDefault());
+  // Touch. A finger is not a mouse: a tap is a click (and raises the
+  // keyboard through onTap), a swipe scrolls, a hold then move is a drag,
+  // and a hold without moving is a right click. The same rules as sip's
+  // touch layer (mobile.js), on our own pointer events.
+  canvas.style.touchAction = 'none';
+  const HOLD_MS = opts.longPressMs ?? 450, SLOP = opts.slopPx ?? 10;
+  let touch = null;
+  const touchPost = (action, button, p, pressed) => post({ type: 'pointer', action, button, mods: 0, x: p.x, y: p.y, pressed, t: performance.now() });
+  on(canvas, 'pointerdown', (ev) => {
+    if (ev.pointerType !== 'touch') return;
+    ev.stopImmediatePropagation();
+    canvas.setPointerCapture?.(ev.pointerId);
+    const start = pos(ev);
+    touch = { id: ev.pointerId, start, last: start, mode: 'none', held: false, acc: 0 };
+    touch.timer = setTimeout(() => { if (touch && touch.mode === 'none') touch.held = true; }, HOLD_MS);
+  }, { capture: true });
+  on(canvas, 'pointermove', (ev) => {
+    if (ev.pointerType !== 'touch' || !touch || ev.pointerId !== touch.id) return;
+    ev.stopImmediatePropagation();
+    const p = pos(ev);
+    const moved = Math.hypot(p.x - touch.start.x, p.y - touch.start.y) > SLOP;
+    if (touch.mode === 'none' && moved) {
+      clearTimeout(touch.timer);
+      touch.mode = touch.held ? 'drag' : 'pan';
+      if (touch.mode === 'drag') touchPost(0, 1, touch.start, 1);
+    }
+    if (touch.mode === 'pan') {
+      // Content follows the finger: dragging down shows older lines.
+      touch.acc += (touch.last.y - p.y) / opts.cell().ch;
+      const lines = Math.trunc(touch.acc);
+      if (lines) { touch.acc -= lines; post({ type: 'wheel', lines, mods: 0, ...p }); }
+    } else if (touch.mode === 'drag') touchPost(2, 1, p, 1);
+    touch.last = p;
+  }, { capture: true });
+  const touchEnd = (ev) => {
+    if (ev.pointerType !== 'touch' || !touch || ev.pointerId !== touch.id) return;
+    ev.stopImmediatePropagation();
+    clearTimeout(touch.timer);
+    const p = touch.last;
+    if (touch.mode === 'drag') touchPost(1, 1, p, 0);
+    else if (touch.mode === 'none' && ev.type === 'pointerup') {
+      if (touch.held) { touchPost(0, 2, p, 1); touchPost(1, 2, p, 0); }
+      else { opts.onTap?.(); ta.focus({ preventScroll: true }); touchPost(0, 1, p, 1); touchPost(1, 1, p, 0); }
+    }
+    touch = null;
+  };
+  on(canvas, 'pointerup', touchEnd, { capture: true });
+  on(canvas, 'pointercancel', touchEnd, { capture: true });
+
   on(canvas, 'pointerdown', (ev) => {
     ta.focus({ preventScroll: true });
     buttons |= 1 << ev.button;

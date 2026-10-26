@@ -81,7 +81,7 @@ export class WorkerTerm {
       this.cw = m.cw; this.ch = m.ch; this.renderer = m.renderer;
       this.canvas.style.width = `${(this.cols * m.cw) / this.dpr}px`;
       this.canvas.style.height = `${(this.rows * m.ch) / this.dpr}px`;
-      if (this.opts.input !== false) this.input = attachInput(this.canvas.parentElement, this.canvas, (msg) => this.worker.postMessage(msg), { cell: () => ({ cw: this.cw / this.dpr, ch: this.ch / this.dpr }), onKey: this.opts.onKey, preeditStyle: { font: `${this.opts.fontSize ?? 14}px ${JSON.stringify(this.opts.fontFamily || 'monospace')}, monospace`, color: '#fff', background: 'rgba(0,0,0,0.8)' } });
+      if (this.opts.input !== false) this.input = attachInput(this.canvas.parentElement, this.canvas, (msg) => this.worker.postMessage(msg), { cell: () => ({ cw: this.cw / this.dpr, ch: this.ch / this.dpr }), onKey: (ev) => this.opts.onKey?.(ev), keyFilter: (ev) => (this.opts.keyFilter ? this.opts.keyFilter(ev) : ev), textFilter: (t) => (this.opts.textFilter ? this.opts.textFilter(t) : t), onTap: () => this.opts.onTap?.(), longPressMs: this.opts.longPressMs, slopPx: this.opts.slopPx, preeditStyle: { font: `${this.opts.fontSize ?? 14}px ${JSON.stringify(this.opts.fontFamily || 'monospace')}, monospace`, color: '#fff', background: 'rgba(0,0,0,0.8)' } });
       this.readyResolve();
     } else if (m.type === 'written') {
       for (const id of m.ids) { const p = this.pending.get(id); this.pending.delete(id); p?.resolve(); }
@@ -150,6 +150,27 @@ export class WorkerTerm {
   selectAll() { this.worker.postMessage({ type: 'selectAll' }); }
   clearSelection() { this.worker.postMessage({ type: 'selectClear' }); }
   setCopyOnSelect(on) { this.worker.postMessage({ type: 'options', copyOnSelect: on }); }
+  /** Raw input for the program (a phone key bar, a page button). */
+  sendInput(data) {
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    this.worker.postMessage({ type: 'send', bytes }, [bytes.buffer]);
+  }
+  /** The element that holds focus and the software keyboard. */
+  get textarea() { return this.input?.textarea ?? null; }
+  /**
+   * Resize the grid to fill an element (the host by default). Returns the
+   * new size. Call it from a ResizeObserver; the phone keyboard inset
+   * changes the host's size through CSS.
+   */
+  async fit(el = this.canvas.parentElement) {
+    const cs = getComputedStyle(el);
+    const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const h = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const cols = Math.max(2, Math.floor(w / (this.cw / this.dpr)));
+    const rows = Math.max(1, Math.floor(h / (this.ch / this.dpr)));
+    if (cols !== this.cols || rows !== this.rows) await this.resize(cols, rows);
+    return { cols: this.cols, rows: this.rows };
+  }
   scroll(delta) { this.worker.postMessage({ type: 'scroll', delta }); }
   /**
    * Open the connection inside the worker. transport: { kind: 'websocket' |
