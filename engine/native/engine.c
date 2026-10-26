@@ -47,6 +47,9 @@
 
 #define PLACEHOLDER_CP 0x10EEEEu /* kitty graphics unicode placeholder */
 #define GT_CAP 32768u /* glyph table limit, power of two */
+#define RUNS_PER_ROW 16u
+#define RUN_WORDS 5u
+#define RUN_MAX 64u /* cells in one shaped run */
 #define GT_START 2048u /* initial glyph table, grows by doubling */
 #define ARENA_CAP (1u << 20) /* text arena limit */
 #define ARENA_START (32u << 10)
@@ -92,6 +95,11 @@ typedef struct Eng {
   uint32_t arena_len;
   uint32_t next_slot, max_slots, slots_per_row;
   uint32_t gt_cap, arena_cap, gt_used;
+  /* shaped runs (Arabic, Hebrew, Indic): per row up to RUNS_PER_ROW entries of
+   * x, n, slot, fg, flags; drawn over the cells as one glyph each */
+  uint32_t* runs;
+  uint8_t* run_n;
+  uint8_t* cls;
   uint32_t atlas_gen;
   Miss* miss;
   uint32_t miss_n;
@@ -550,6 +558,9 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &gc);
   e->inst = xalloc((size_t)cols * rows * 12);
   e->row_dirty = xalloc(rows);
+  e->runs = xalloc((size_t)rows * RUNS_PER_ROW * RUN_WORDS * 4);
+  e->run_n = xalloc(rows);
+  e->cls = xalloc(cols);
   /* The glyph table and text arena start small and grow with use, so an
    * idle terminal holds little wasm memory. */
   e->gt_cap = GT_START;
@@ -675,7 +686,9 @@ static uint32_t glyph(Eng* e, uint64_t key, const uint8_t* text, size_t len, uin
       if (e->gt_used + 1 > e->gt_cap / 2 && gt_grow(e)) return glyph(e, key, text, len, width, style, full);
       if (e->arena_len + len > e->arena_cap) arena_grow(e, len);
       uint32_t slot = e->next_slot;
-      if (width == 2 && (slot % e->slots_per_row) == e->slots_per_row - 1) slot++;
+      /* A glyph never wraps across atlas rows: a wide one or a shaped run
+       * starts the next row when it would. */
+      if ((slot % e->slots_per_row) + width > e->slots_per_row) slot += e->slots_per_row - slot % e->slots_per_row;
       if (slot + width > e->max_slots || e->arena_len + len > e->arena_cap ||
           e->miss_n >= MISS_CAP || i > e->gt_cap / 2) {
         *full = true;
@@ -715,6 +728,79 @@ static GhosttyRenderStateColors g_colors;
 
 /* Build one row into the instance buffer. Returns false if the atlas
  * filled up mid-row. */
+/* ---- shaped runs ------------------------------------------------------ */
+/* Scripts that need more than one cell at a time to draw right: right to
+ * left scripts (Hebrew, Arabic, Syriac, Thaana, NKo) for joining and
+ * order, and Brahmic scripts (Devanagari through Sinhala, Tibetan,
+ * Myanmar, Khmer) for conjuncts and vowel signs that move across clusters.
+ * A run of them, with the spaces, digits and punctuation between them,
+ * is drawn by the browser's text stack as one string, so it shapes and
+ * applies the bidi algorithm, inside the cells the terminal gave it. */
+enum { CL_NONE = 0, CL_RTL = 1, CL_COMPLEX = 2, CL_NEUTRAL = 3 };
+static uint8_t classify(uint32_t cp) {
+  if ((cp >= 0x0590 && cp <= 0x08FF) || (cp >= 0xFB1D && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFF) ||
+      (cp >= 0x10800 && cp <= 0x10FFF) || (cp >= 0x1E800 && cp <= 0x1EFFF))
+    return CL_RTL;
+  if ((cp >= 0x0900 && cp <= 0x0DFF) || (cp >= 0x0F00 && cp <= 0x109F) || (cp >= 0x1780 && cp <= 0x17FF) ||
+      (cp >= 0xA8E0 && cp <= 0xA8FF))
+    return CL_COMPLEX;
+  if (cp == 0 || cp == ' ' || (cp >= '0' && cp <= '9') || cp == '.' || cp == ',' || cp == ':' || cp == ';' ||
+      cp == '!' || cp == '?' || cp == '-' || cp == '(' || cp == ')' || cp == '"' || cp == '\'' || cp == 0x200C || cp == 0x200D)
+    return CL_NEUTRAL;
+  return CL_NONE;
+}
+
+#define MF_RUN 4u /* miss style bit: a shaped run */
+#define MF_RTL 8u /* the run is right to left */
+
+static void find_runs(Eng* e, uint16_t y, const GhosttyCellsView* raw, uint32_t* out, uint32_t n, bool* full) {
+  e->run_n[y] = 0;
+  uint32_t* runs = e->runs + (size_t)y * RUNS_PER_ROW * RUN_WORDS;
+  for (uint32_t x = 0; x < n;) {
+    uint8_t c = e->cls[x] & 15;
+    if (c != CL_RTL && c != CL_COMPLEX) { x++; continue; }
+    /* Extend over shaped cells and neutrals that lead to more of them, with
+     * one style; stop at the run limit. */
+    uint32_t a = x, b = x, sid = C_STYLE(raw->ptr[x]);
+    bool rtl = c == CL_RTL;
+    for (uint32_t k = x + 1; k < n && k - a < RUN_MAX && C_STYLE(raw->ptr[k]) == sid; k++) {
+      uint8_t ck = e->cls[k] & 15;
+      if (ck == CL_RTL || ck == CL_COMPLEX) { b = k; rtl |= ck == CL_RTL; continue; }
+      if (ck != CL_NEUTRAL) break;
+    }
+    x = b + 1;
+    if (e->run_n[y] >= RUNS_PER_ROW) continue;
+    /* The run's text in logical order. */
+    uint8_t text[RUN_MAX * 16];
+    size_t len = 0;
+    for (uint32_t k = a; k <= b; k++) {
+      GhosttyCell cell = raw->ptr[k];
+      if (C_WIDE(cell) == GHOSTTY_CELL_WIDE_SPACER_TAIL) continue;
+      if (C_TAG(cell) == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME) {
+        GhosttyBuffer t = {.ptr = text + len, .cap = sizeof(text) - len, .len = 0};
+        ghostty_render_state_row_cells_select(e->cells, (uint16_t)k);
+        if (ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &t) == GHOSTTY_SUCCESS)
+          len += t.len;
+      } else {
+        uint32_t cp = C_CP(cell);
+        if (len + 4 > sizeof(text)) break;
+        len += cp > 32 ? utf8(cp, text + len) : (text[len] = ' ', 1);
+      }
+    }
+    uint32_t w = b - a + 1;
+    uint32_t st = e->cls[a] >> 4; /* the head cell's bold and italic */
+    uint64_t key = (fnv(text, len) & ~(0xFull << 60)) | (1ull << 63) | (1ull << 60) | ((uint64_t)(st & 3) << 61);
+    uint32_t slot = glyph(e, key, text, len, w, (st & 3) | MF_RUN | (rtl ? MF_RTL : 0), full);
+    if (*full) return;
+    if (!slot) continue;
+    uint32_t* r = runs + (size_t)e->run_n[y]++ * RUN_WORDS;
+    r[0] = a; r[1] = w; r[2] = slot; r[3] = out[a * 3 + 1]; r[4] = rtl ? 1 : 0;
+    /* The cells keep their backgrounds and decorations; their own glyphs
+     * are dropped for the run's. */
+    for (uint32_t k = a; k <= b; k++) out[k * 3] &= ~I_SLOT_MASK; /* keep I_WIDE: the head still covers both cells */
+  }
+}
+
 static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors) {
   GhosttyCellsView raw = {0};
   if (ghostty_render_state_row_get(e->it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS_RAW, &raw)) return true;
@@ -728,7 +814,7 @@ static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors
   bool inverse = false, invisible = false;
   uint32_t dfg = sfg, dbg = sbg;
   size_t n = raw.len < e->cols ? raw.len : e->cols;
-  bool full = false;
+  bool full = false, shaped = false;
   for (uint32_t x = 0; x < n; x++) {
     GhosttyCell c = raw.ptr[x];
     uint32_t tag = C_TAG(c), wide = C_WIDE(c), sid = C_STYLE(c);
@@ -759,6 +845,12 @@ static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors
     if (inverse) { uint32_t t = fg; fg = bg; bg = t; }
     if (any_sel && x >= sel.start_x && x <= sel.end_x) { uint32_t t = fg; fg = bg; bg = t; }
     uint32_t w0 = sflags, slot = 0;
+    {
+      uint8_t cl = (tag == GHOSTTY_CELL_CONTENT_CODEPOINT || tag == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME)
+                       ? classify(C_CP(c)) : CL_NEUTRAL;
+      e->cls[x] = (uint8_t)(cl | (sstyle << 4));
+      if (cl == CL_RTL || cl == CL_COMPLEX) shaped = true;
+    }
     if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL) {
       w0 = I_TAIL;
     } else if (wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) {
@@ -795,7 +887,34 @@ static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors
   for (uint32_t x = n; x < e->cols; x++) {
     out[x * 3] = 0; out[x * 3 + 1] = dfg; out[x * 3 + 2] = dbg;
   }
+  e->run_n[y] = 0;
+  if (shaped) {
+    find_runs(e, y, &raw, out, (uint32_t)n, &full);
+    if (full) return false;
+  }
   return true;
+}
+
+/* All shaped runs in view: count, then per run x, y, cells, slot, fg, flags. */
+EXPORT(eng_runs) uint32_t* eng_runs(Eng* e) {
+  static uint32_t* buf;
+  static uint32_t cap;
+  uint32_t need = 1 + e->rows * RUNS_PER_ROW * 6;
+  if (cap < need) {
+    if (buf) ghostty_free(NULL, (uint8_t*)buf, cap * 4);
+    buf = (uint32_t*)xalloc((size_t)need * 4);
+    cap = buf ? need : 0;
+    if (!buf) return NULL;
+  }
+  uint32_t k = 0;
+  for (uint32_t y = 0; y < e->rows; y++)
+    for (uint32_t i = 0; i < e->run_n[y]; i++) {
+      uint32_t* r = e->runs + ((size_t)y * RUNS_PER_ROW + i) * RUN_WORDS;
+      uint32_t* o = buf + 1 + k++ * 6;
+      o[0] = r[0]; o[1] = y; o[2] = r[1]; o[3] = r[2]; o[4] = r[3]; o[5] = r[4];
+    }
+  buf[0] = k;
+  return buf;
 }
 
 /* ---- search ---------------------------------------------------------- */
@@ -1080,6 +1199,12 @@ EXPORT(eng_resize) uint32_t eng_resize(Eng* e, uint16_t cols, uint16_t rows) {
   }
   ghostty_free(NULL, (uint8_t*)e->inst, (size_t)e->cols * e->rows * 12);
   ghostty_free(NULL, e->row_dirty, e->rows);
+  ghostty_free(NULL, (uint8_t*)e->runs, (size_t)e->rows * RUNS_PER_ROW * RUN_WORDS * 4);
+  ghostty_free(NULL, e->run_n, e->rows);
+  ghostty_free(NULL, e->cls, e->cols);
+  e->runs = xalloc((size_t)rows * RUNS_PER_ROW * RUN_WORDS * 4);
+  e->run_n = xalloc(rows);
+  e->cls = xalloc(cols);
   e->inst = inst;
   e->row_dirty = dirty;
   e->cols = cols;
@@ -1638,8 +1763,23 @@ EXPORT(eng_dump_render) uint8_t* eng_dump_render(Eng* e) {
   for (uint32_t y = 0; y < e->rows; y++) {
     uint32_t* row = e->inst + (size_t)y * e->cols * 3;
     uint32_t start = e->dump_len, end = e->dump_len, h = 2166136261u;
+    const uint32_t* runs = e->runs + (size_t)y * RUNS_PER_ROW * RUN_WORDS;
+    uint32_t ri = 0;
     for (uint32_t x = 0; x < e->cols; x++) {
       uint32_t w0 = row[x * 3], slot = w0 & I_SLOT_MASK;
+      /* A shaped run's text stands for all of its cells. */
+      while (ri < e->run_n[y] && runs[ri * RUN_WORDS] + runs[ri * RUN_WORDS + 1] <= x) ri++;
+      bool in_run = ri < e->run_n[y] && x >= runs[ri * RUN_WORDS];
+      if (in_run) {
+        if (x == runs[ri * RUN_WORDS]) {
+          uint32_t rs = runs[ri * RUN_WORDS + 2];
+          dput(e, e->arena + e->slot_text[rs], e->slot_len[rs]);
+          end = e->dump_len;
+        }
+        uint32_t a[3] = {row[x * 3 + 1], row[x * 3 + 2], w0 & ~(I_SLOT_MASK | I_WIDE)};
+        if (!(w0 & I_TAIL)) for (int k = 0; k < 3; k++) h = (h ^ a[k]) * 16777619u;
+        continue;
+      }
       if (w0 & I_TAIL) continue;
       if (slot) {
         dput(e, e->arena + e->slot_text[slot], e->slot_len[slot]);

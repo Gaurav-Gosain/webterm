@@ -216,7 +216,87 @@ function setupGL(canvas) {
   gl.bindVertexArray(vao);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   iprog = null;
+  rprog = null;
   return true;
+}
+
+// Shaped runs are drawn over the cells by a small instanced pass; the
+// program is built the first time a row has one.
+const RVS = `#version 300 es
+layout(location=0) in uvec4 a_run; // x, y, cells, slot
+layout(location=1) in uint a_fg;
+uniform vec2 u_cell;
+uniform vec2 u_view;
+uniform int u_spr;
+flat out ivec2 v_origin;
+flat out vec3 v_fg;
+out vec2 v_local;
+void main() {
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  vec2 size = vec2(float(a_run.z), 1.0) * u_cell;
+  vec2 px = vec2(float(a_run.x), float(a_run.y)) * u_cell + corner * size;
+  v_local = corner * size;
+  int slot = int(a_run.w);
+  v_origin = ivec2(slot % u_spr, slot / u_spr) * ivec2(u_cell);
+  v_fg = vec3(float(a_fg & 255u), float((a_fg >> 8) & 255u), float((a_fg >> 16) & 255u)) / 255.0;
+  vec2 ndc = px / u_view * 2.0 - 1.0;
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
+}`;
+const RFS = `#version 300 es
+precision highp float;
+uniform highp sampler2D u_atlas;
+flat in ivec2 v_origin;
+flat in vec3 v_fg;
+in vec2 v_local;
+out vec4 o;
+void main() {
+  float a = texelFetch(u_atlas, v_origin + ivec2(v_local), 0).a;
+  if (a <= 0.0) discard;
+  o = vec4(v_fg, a);
+}`;
+let rprog = null, rvao, rbuf, runi = {};
+function ensureRunGL() {
+  if (rprog) return;
+  rprog = gl.createProgram();
+  gl.attachShader(rprog, compile(gl.VERTEX_SHADER, RVS));
+  gl.attachShader(rprog, compile(gl.FRAGMENT_SHADER, RFS));
+  gl.linkProgram(rprog);
+  if (!gl.getProgramParameter(rprog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(rprog));
+  for (const n of ['u_cell', 'u_view', 'u_spr', 'u_atlas']) runi[n] = gl.getUniformLocation(rprog, n);
+  rvao = gl.createVertexArray();
+  gl.bindVertexArray(rvao);
+  rbuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, rbuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribIPointer(0, 4, gl.UNSIGNED_INT, 24, 0);
+  gl.vertexAttribDivisor(0, 1);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 24, 16);
+  gl.vertexAttribDivisor(1, 1);
+  gl.bindVertexArray(vao);
+}
+
+function runList() {
+  const p = x.eng_runs(e);
+  if (!p) return null;
+  const n = new Uint32Array(x.memory.buffer, p, 1)[0];
+  return n ? new Uint32Array(x.memory.buffer, p + 4, n * 6).slice() : null;
+}
+
+function drawRuns(list) {
+  ensureRunGL();
+  gl.useProgram(rprog);
+  gl.bindVertexArray(rvao);
+  gl.uniform2f(runi.u_cell, cw, ch);
+  gl.uniform2f(runi.u_view, cols * cw, rows * ch);
+  gl.uniform1i(runi.u_spr, spr);
+  gl.uniform1i(runi.u_atlas, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, rbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, list, gl.STREAM_DRAW);
+  gl.enable(gl.BLEND);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, list.length / 6);
+  gl.useProgram(prog);
+  gl.bindVertexArray(vao);
 }
 
 // The image program is built the first time an image is drawn, so a terminal
@@ -350,8 +430,45 @@ function clearAtlas() {
 // font for anything the web font lacks (CJK, emoji, Arabic, Devanagari).
 const STAGE_COLS = 32, STAGE_ROWS = 8; // glyphs per staging batch: 32 x 8, two cells each
 
+// A shaped run: the browser lays the whole string out (joining, conjuncts,
+// bidi order) and it is fitted into the run's cells: right-aligned for right
+// to left text, squeezed only when it is wider than its cells.
+let runCtx = null;
+function rasterRun(slot, text, width, style, rtl) {
+  const w = width * cw;
+  if (!runCtx || runCtx.canvas.width < w) {
+    runCtx = new OffscreenCanvas(Math.max(w, 64 * cw), ch).getContext('2d', { willReadFrequently: true });
+  }
+  const c = runCtx;
+  c.clearRect(0, 0, w, ch);
+  c.save();
+  c.font = fontString(style & 3);
+  c.fillStyle = '#fff';
+  c.textBaseline = 'alphabetic';
+  c.direction = rtl ? 'rtl' : 'ltr';
+  const natural = c.measureText(text).width;
+  const k = natural > w ? w / natural : 1;
+  c.beginPath(); c.rect(0, 0, w, ch); c.clip();
+  if (rtl) { c.translate(w, 0); c.scale(k, 1); c.textAlign = 'right'; c.fillText(text, 0, baseline); }
+  else { c.scale(k, 1); c.textAlign = 'left'; c.fillText(text, 0, baseline); }
+  c.restore();
+  const d = c.getImageData(0, 0, w, ch).data;
+  gl.activeTexture(gl.TEXTURE0);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, (slot % spr) * cw, Math.floor(slot / spr) * ch, w, ch, gl.RGBA, gl.UNSIGNED_BYTE, d);
+}
+
 function raster(n) {
   if (mode2d) return note2d(n);
+  {
+    // Shaped runs first, each on its own; the rest go through the batch.
+    const mem = u8(), miss = new Uint32Array(x.memory.buffer, x.eng_miss(e), n * 3), arena = x.eng_arena(e);
+    for (let i = 0; i < n; i++) {
+      const meta = miss[i * 3 + 2];
+      if (!((meta >>> 24) & 4)) continue;
+      const off = miss[i * 3 + 1];
+      rasterRun(miss[i * 3], decoder.decode(mem.subarray(arena + off, arena + off + (meta & 0xffff))), (meta >>> 16) & 0xff, meta >>> 24, !!((meta >>> 24) & 8));
+    }
+  }
   const mem = u8();
   const miss = new Uint32Array(x.memory.buffer, x.eng_miss(e), n * 3);
   const arena = x.eng_arena(e);
@@ -368,6 +485,7 @@ function raster(n) {
     for (let k = 0; k < count; k++) {
       const i = base + k;
       const off = miss[i * 3 + 1], meta = miss[i * 3 + 2];
+      if ((meta >>> 24) & 4) continue; // shaped run, drawn above
       const len = meta & 0xffff, style = meta >>> 24;
       const f = fontString(style);
       if (f !== font) { ctx.font = f; font = f; }
@@ -382,6 +500,7 @@ function raster(n) {
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, sw);
     for (let k = 0; k < count; k++) {
       const i = base + k;
+      if ((miss[i * 3 + 2] >>> 24) & 4) continue;
       const slot = miss[i * 3], width = (miss[i * 3 + 2] >>> 16) & 0xff;
       const w = cw * width, sx = (k % STAGE_COLS) * 2 * cw, sy = Math.floor(k / STAGE_COLS) * ch;
       gl.activeTexture(gl.TEXTURE0);
@@ -507,6 +626,23 @@ function paintRow2d(y, inst, cur, curColor, pass) {
   }
 }
 
+function paintRun2d(r, i) {
+  const g = slot2d.get(r[i + 3]);
+  if (!g) return;
+  const w = r[i + 2] * cw, x0 = r[i] * cw, top = r[i + 1] * ch, rtl = !!r[i + 5];
+  ctx2d.save();
+  ctx2d.beginPath(); ctx2d.rect(x0, top, w, ch); ctx2d.clip();
+  ctx2d.font = fontString(g.style & 3);
+  ctx2d.fillStyle = css(r[i + 4]);
+  ctx2d.direction = rtl ? 'rtl' : 'ltr';
+  const natural = ctx2d.measureText(g.text).width, k = natural > w ? w / natural : 1;
+  ctx2d.translate(rtl ? x0 + w : x0, 0);
+  ctx2d.scale(k, 1);
+  ctx2d.textAlign = rtl ? 'right' : 'left';
+  ctx2d.fillText(g.text, 0, top + baseline);
+  ctx2d.restore();
+}
+
 function draw2d(force, t0) {
   const mem = u8();
   const dirty = x.eng_row_dirty(e);
@@ -527,6 +663,8 @@ function draw2d(force, t0) {
     for (const y of paint) paintRow2d(y, inst, cur, curColor, 2);
     images2dLayer(gfx, 3);
   } else for (const y of paint) paintRow2d(y, inst, cur, curColor, 0);
+  const runs = runList();
+  if (runs) for (let i = 0; i < runs.length; i += 6) if (paint.has(runs[i + 1])) paintRun2d(runs, i);
   prevCur2d = [cur[0], cur[1]];
   renders++;
   lastDraw = performance.now();
@@ -572,8 +710,10 @@ function draw(force) {
   // between the backgrounds and the text, or above the text.
   frameNo++;
   const gfx = gfxList();
+  const runs = runList();
   if (!gfx) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+    if (runs) { drawRuns(runs); gl.disable(gl.BLEND); }
   } else {
     gl.uniform1i(uni.u_mode, 1);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
@@ -582,6 +722,7 @@ function draw(force) {
     drawImages(gfx, 2);
     gl.uniform1i(uni.u_mode, 2);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+    if (runs) drawRuns(runs);
     drawImages(gfx, 3);
     gl.disable(gl.BLEND);
     gl.uniform1i(uni.u_mode, 0);
