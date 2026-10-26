@@ -40,6 +40,16 @@ export function attachInput(host, canvas, post, opts = {}) {
   host.append(ta);
 
   let composing = false;
+  const state = { selection: '' };
+  // execCommand('copy') fires a copy event only when the document has a
+  // selection, so give the hidden textarea one for the duration.
+  const copyNow = () => {
+    ta.value = state.selection;
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.value = '';
+    return ok;
+  };
   const held = new Set(); // codes whose keydown we sent, so keyup follows
 
   on(ta, 'keydown', (ev) => {
@@ -47,6 +57,13 @@ export function attachInput(host, canvas, post, opts = {}) {
     if (opts.onKey && opts.onKey(ev) === false) return;
     // Paste shortcuts produce a paste event; leave them to the browser.
     if ((ev.metaKey || (ev.ctrlKey && ev.shiftKey)) && ev.code === 'KeyV') return;
+    // Copy shortcuts with a selection produce a copy event. Without one,
+    // ctrl+shift+c goes to the program like any other chord.
+    if ((ev.metaKey || (ev.ctrlKey && ev.shiftKey)) && ev.code === 'KeyC' && state.selection) {
+      copyNow();
+      ev.preventDefault();
+      return;
+    }
     // Keep browser and OS shortcuts that use the platform key.
     if (ev.metaKey) return;
     ev.preventDefault();
@@ -75,6 +92,20 @@ export function attachInput(host, canvas, post, opts = {}) {
     const text = ev.clipboardData?.getData('text/plain');
     if (text) post({ type: 'paste', text });
   });
+  // The selected text is cached here (the worker sends it when a selection
+  // ends), so the clipboard is filled inside the copy event itself. That
+  // works on insecure origins, where the async clipboard API does not.
+  on(document, 'copy', (ev) => {
+    if (!state.selection || (document.activeElement !== ta && !host.contains(document.activeElement))) return;
+    ev.clipboardData.setData('text/plain', state.selection);
+    ev.preventDefault();
+  });
+  // IME preedit, drawn over the cursor cell while a composition is open.
+  const pre = document.createElement('div');
+  Object.assign(pre.style, { position: 'absolute', display: 'none', whiteSpace: 'pre', pointerEvents: 'none', zIndex: '2', textDecoration: 'underline', ...(opts.preeditStyle || {}) });
+  host.append(pre);
+  on(ta, 'compositionupdate', (ev) => { pre.textContent = ev.data || ''; pre.style.display = ev.data ? 'block' : 'none'; });
+  on(ta, 'compositionend', () => { pre.textContent = ''; pre.style.display = 'none'; });
   on(ta, 'focus', () => post({ type: 'focus', focused: true }));
   on(ta, 'blur', () => { held.clear(); post({ type: 'focus', focused: false }); });
 
@@ -83,22 +114,25 @@ export function attachInput(host, canvas, post, opts = {}) {
   let buttons = 0;
   const pos = (ev) => { const r = canvas.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
   const button = (b) => (b === 0 ? 1 : b === 1 ? 3 : b === 2 ? 2 : b + 5);
+  // The mousedown default would move focus to the body after our focus()
+  // call, and keys would stop reaching the textarea.
+  on(canvas, 'mousedown', (ev) => ev.preventDefault());
   on(canvas, 'pointerdown', (ev) => {
     ta.focus({ preventScroll: true });
     buttons |= 1 << ev.button;
     canvas.setPointerCapture?.(ev.pointerId);
-    post({ type: 'mouse', action: 0, button: button(ev.button), mods: mods(ev), ...pos(ev), pressed: 1 });
+    post({ type: 'pointer', action: 0, button: button(ev.button), mods: mods(ev), ...pos(ev), pressed: 1, t: ev.timeStamp });
   });
   on(canvas, 'pointerup', (ev) => {
     buttons &= ~(1 << ev.button);
-    post({ type: 'mouse', action: 1, button: button(ev.button), mods: mods(ev), ...pos(ev), pressed: buttons ? 1 : 0 });
+    post({ type: 'pointer', action: 1, button: button(ev.button), mods: mods(ev), ...pos(ev), pressed: buttons ? 1 : 0, t: ev.timeStamp });
   });
   // Motion is sent at most once per animation frame.
   let move = null;
   on(canvas, 'pointermove', (ev) => {
     const b = buttons ? button(Math.log2(buttons & -buttons)) : 0;
     if (!move) requestAnimationFrame(() => { post(move); move = null; });
-    move = { type: 'mouse', action: 2, button: b, mods: mods(ev), ...pos(ev), pressed: buttons ? 1 : 0 };
+    move = { type: 'pointer', action: 2, button: b, mods: mods(ev), ...pos(ev), pressed: buttons ? 1 : 0, t: ev.timeStamp };
   });
   on(canvas, 'contextmenu', (ev) => ev.preventDefault());
   let wheelAcc = 0;
@@ -112,5 +146,18 @@ export function attachInput(host, canvas, post, opts = {}) {
     post({ type: 'wheel', lines, mods: mods(ev), ...pos(ev) });
   }, { passive: false });
 
-  return { textarea: ta, focus: () => ta.focus({ preventScroll: true }), detach: () => { ac.abort(); ta.remove(); } };
+  return {
+    textarea: ta,
+    focus: () => ta.focus({ preventScroll: true }),
+    /** The worker's cursor moved: keep the IME window and preedit on it. */
+    cursor(x, y) {
+      const { cw, ch } = opts.cell();
+      const left = `${x * cw}px`, top = `${y * ch}px`;
+      Object.assign(ta.style, { left, top });
+      Object.assign(pre.style, { left, top, height: `${ch}px`, lineHeight: `${ch}px` });
+    },
+    setSelection(text) { state.selection = text; },
+    copy: () => copyNow(),
+    detach: () => { ac.abort(); ta.remove(); pre.remove(); },
+  };
 }

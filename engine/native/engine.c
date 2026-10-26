@@ -96,6 +96,13 @@ typedef struct Eng {
   GhosttyKeyEvent kev;
   GhosttyMouseEncoder menc;
   GhosttyMouseEvent mev;
+  /* events for the page: [kind u32][len u32][bytes, padded to 4] ... */
+  uint8_t* ev;
+  uint32_t ev_len, ev_cap;
+  GhosttySelectionGesture gesture;
+  GhosttySelectionGestureEvent gpress, gdrag, grelease;
+  uint8_t* sel_text;
+  size_t sel_len;
 } Eng;
 
 static void* xalloc(size_t n) {
@@ -122,6 +129,96 @@ static void out_put(Eng* e, const uint8_t* p, size_t n) {
   }
   MEMCPY(e->out + e->out_len, p, n);
   e->out_len += (uint32_t)n;
+}
+
+/* Event kinds posted to the page. */
+#define EV_TITLE 1
+#define EV_BELL 2
+#define EV_CLIPBOARD 3
+
+static void ev_put(Eng* e, uint32_t kind, const uint8_t* p, size_t n, uint8_t prefix, bool has_prefix) {
+  size_t body = n + (has_prefix ? 1 : 0);
+  size_t need = 8 + ((body + 3) & ~(size_t)3);
+  if (e->ev_len + need > e->ev_cap) {
+    uint32_t cap = e->ev_cap ? e->ev_cap : 4096;
+    while (cap < e->ev_len + need) cap *= 2;
+    uint8_t* next = ghostty_alloc(NULL, cap);
+    if (!next) return;
+    if (e->ev_len) MEMCPY(next, e->ev, e->ev_len);
+    if (e->ev) ghostty_free(NULL, e->ev, e->ev_cap);
+    e->ev = next;
+    e->ev_cap = cap;
+  }
+  uint32_t hdr[2] = {kind, (uint32_t)body};
+  MEMCPY(e->ev + e->ev_len, hdr, 8);
+  uint8_t* d = e->ev + e->ev_len + 8;
+  if (has_prefix) *d++ = prefix;
+  if (n) MEMCPY(d, p, n);
+  e->ev_len += (uint32_t)need;
+}
+
+static void on_bell(GhosttyTerminal t, void* user) { (void)t; ev_put(user, EV_BELL, NULL, 0, 0, false); }
+
+static void on_title(GhosttyTerminal t, void* user) {
+  GhosttyString title = {0};
+  if (ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_TITLE, &title) == GHOSTTY_SUCCESS)
+    ev_put(user, EV_TITLE, title.ptr, title.len, 0, false);
+}
+
+/* OSC 52 (and OSC 5522, OSC 1337 Copy) writes: the text goes to the page,
+ * which owns the clipboard. sip's osc52gate has already filtered the stream
+ * on the server when the deployment denies it. Reads are not supported. */
+static void on_clipboard(GhosttyTerminal t, void* user, const GhosttyClipboardWrite* w) {
+  (void)t;
+  Eng* e = user;
+  const GhosttyClipboardContent* text = NULL;
+  for (size_t i = 0; i < w->contents_len; i++) {
+    const GhosttyString m = w->contents[i].mime;
+    if (m.len >= 5 && __builtin_memcmp(m.ptr, "text/", 5) == 0) { text = &w->contents[i]; break; }
+  }
+  GhosttyClipboardWriteReply reply = {.size = sizeof(reply)};
+  if (w->contents_len == 0) {
+    ev_put(e, EV_CLIPBOARD, NULL, 0, (uint8_t)w->location, true);
+  } else if (text) {
+    ev_put(e, EV_CLIPBOARD, text->data.ptr, text->data.len, (uint8_t)w->location, true);
+  } else {
+    reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
+  }
+  w->reply(w, &reply);
+}
+
+static bool on_size(GhosttyTerminal t, void* user, GhosttySizeReportSize* out) {
+  (void)t;
+  Eng* e = user;
+  *out = (GhosttySizeReportSize){.rows = e->rows, .columns = e->cols, .cell_width = e->cw, .cell_height = e->ch};
+  return true;
+}
+
+static bool on_attributes(GhosttyTerminal t, void* user, GhosttyDeviceAttributes* a) {
+  (void)t; (void)user;
+  /* VT220 class, with ANSI colour (22). Sixel (4) is added when the engine
+   * draws sixel. */
+  *a = (GhosttyDeviceAttributes){
+      .primary = {.conformance_level = 62, .features = {22}, .num_features = 1},
+      .secondary = {.device_type = 1, .firmware_version = 10, .rom_cartridge = 0},
+      .tertiary = {.unit_id = 0},
+  };
+  return true;
+}
+
+static GhosttyString on_xtversion(GhosttyTerminal t, void* user) {
+  (void)t; (void)user;
+  static const char v[] = "webterm-engine(0.1)";
+  return (GhosttyString){.ptr = (const uint8_t*)v, .len = sizeof(v) - 1};
+}
+
+static bool on_scheme(GhosttyTerminal t, void* user, GhosttyColorScheme* out) {
+  (void)user;
+  GhosttyColorRgb bg = {0};
+  ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg);
+  *out = (2126u * bg.r + 7152u * bg.g + 722u * bg.b) >= 1280000u ? GHOSTTY_COLOR_SCHEME_LIGHT
+                                                                  : GHOSTTY_COLOR_SCHEME_DARK;
+  return true;
 }
 
 static void on_pty(GhosttyTerminal t, void* user, const uint8_t* p, size_t n) {
@@ -163,6 +260,18 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_USERDATA, e);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_RENDER_HOLD, (const void*)on_hold);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void*)on_pty);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_BELL, (const void*)on_bell);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, (const void*)on_title);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, (const void*)on_clipboard);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SIZE, (const void*)on_size);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES, (const void*)on_attributes);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void*)on_xtversion);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, (const void*)on_scheme);
+  if (ghostty_selection_gesture_new(NULL, &e->gesture) ||
+      ghostty_selection_gesture_event_new(NULL, &e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS) ||
+      ghostty_selection_gesture_event_new(NULL, &e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG) ||
+      ghostty_selection_gesture_event_new(NULL, &e->grelease, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE))
+    return NULL;
   if (ghostty_key_encoder_new(NULL, &e->kenc) || ghostty_key_event_new(NULL, &e->kev) ||
       ghostty_mouse_encoder_new(NULL, &e->menc) || ghostty_mouse_event_new(NULL, &e->mev))
     return NULL;
@@ -580,6 +689,101 @@ EXPORT(eng_resize) uint32_t eng_resize(Eng* e, uint16_t cols, uint16_t rows) {
   return 0;
 }
 
+/* ---- events and selection ------------------------------------------ */
+EXPORT(eng_events) uint8_t* eng_events(Eng* e) { return e->ev; }
+EXPORT(eng_events_len) uint32_t eng_events_len(Eng* e) { return e->ev_len; }
+EXPORT(eng_events_clear) void eng_events_clear(Eng* e) { e->ev_len = 0; }
+
+static bool viewport_ref(Eng* e, double x, double y, GhosttyGridRef* ref) {
+  int32_t cx = (int32_t)(x / e->cw), cy = (int32_t)(y / e->ch);
+  if (cx < 0) cx = 0;
+  if (cy < 0) cy = 0;
+  if (cx >= e->cols) cx = e->cols - 1;
+  if (cy >= e->rows) cy = e->rows - 1;
+  GhosttyPoint p = {.tag = GHOSTTY_POINT_TAG_VIEWPORT, .value = {.coordinate = {(uint16_t)cx, (uint32_t)cy}}};
+  *ref = (GhosttyGridRef)GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  return ghostty_terminal_grid_ref(e->t, p, ref) == GHOSTTY_SUCCESS;
+}
+
+/* A selection gesture from the pointer, in canvas pixels. kind: 0 press,
+ * 1 drag, 2 release. Ghostty's gesture handles click counting (cell, word,
+ * line), drag thresholds and the anchor. Returns 1 when a selection is set,
+ * 0 when it was cleared or left alone. */
+EXPORT(eng_select)
+uint32_t eng_select(Eng* e, uint32_t kind, double x, double y, double time_ms, uint32_t rect) {
+  GhosttyGridRef ref;
+  bool have = viewport_ref(e, x, y, &ref);
+  GhosttySurfacePosition pos = {x, y};
+  GhosttySelection sel = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttyResult r;
+  if (kind == 0) {
+    if (!have) return 0;
+    uint64_t ns = (uint64_t)(time_ms * 1e6);
+    uint64_t interval = 500000000ull;
+    double dist = (double)e->cw;
+    ghostty_selection_gesture_event_set(e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+    ghostty_selection_gesture_event_set(e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &pos);
+    ghostty_selection_gesture_event_set(e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_TIME_NS, &ns);
+    ghostty_selection_gesture_event_set(e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_INTERVAL_NS, &interval);
+    ghostty_selection_gesture_event_set(e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_DISTANCE, &dist);
+    r = ghostty_selection_gesture_event(e->gesture, e->t, e->gpress, &sel);
+  } else if (kind == 1) {
+    if (!have) return 0;
+    GhosttySelectionGestureGeometry geo = {.columns = e->cols, .cell_width = e->cw, .padding_left = 0, .screen_height = e->rows * e->ch};
+    bool rectangle = rect != 0;
+    ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+    ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &pos);
+    ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geo);
+    ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_RECTANGLE, &rectangle);
+    r = ghostty_selection_gesture_event(e->gesture, e->t, e->gdrag, &sel);
+  } else {
+    ghostty_selection_gesture_event_set(e->grelease, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, have ? &ref : NULL);
+    ghostty_selection_gesture_event(e->gesture, e->t, e->grelease, NULL);
+    return 0;
+  }
+  if (r == GHOSTTY_SUCCESS) {
+    ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SELECTION, &sel);
+    return 1;
+  }
+  if (r == GHOSTTY_NO_VALUE && kind == 0) ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SELECTION, NULL);
+  return 0;
+}
+
+EXPORT(eng_select_clear) void eng_select_clear(Eng* e) {
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SELECTION, NULL);
+}
+
+EXPORT(eng_select_all) uint32_t eng_select_all(Eng* e) {
+  GhosttySelection sel = GHOSTTY_INIT_SIZED(GhosttySelection);
+  if (ghostty_terminal_select_all(e->t, &sel)) return 0;
+  return ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SELECTION, &sel) == GHOSTTY_SUCCESS;
+}
+
+/* The selected text as plain UTF-8, soft wraps joined and trailing blanks
+ * trimmed, the way Ghostty copies. Returns the length; eng_selection_ptr
+ * gives the bytes until the next call. */
+EXPORT(eng_selection_text) uint32_t eng_selection_text(Eng* e) {
+  if (e->sel_text) { ghostty_free(NULL, e->sel_text, e->sel_len); e->sel_text = NULL; e->sel_len = 0; }
+  GhosttyTerminalSelectionFormatOptions o = GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
+  o.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  o.unwrap = true;
+  o.trim = true;
+  if (ghostty_terminal_selection_format_alloc(e->t, NULL, o, &e->sel_text, &e->sel_len)) return 0;
+  return (uint32_t)e->sel_len;
+}
+EXPORT(eng_selection_ptr) uint8_t* eng_selection_ptr(Eng* e) { return e->sel_text; }
+
+/* Viewport scroll position for a scrollbar: total rows, offset of the top
+ * viewport row, viewport rows. */
+EXPORT(eng_scrollbar) uint32_t* eng_scrollbar(Eng* e) {
+  static uint32_t out[3];
+  GhosttyTerminalScrollbar sb = {0};
+  if (ghostty_terminal_get(e->t, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &sb) == GHOSTTY_SUCCESS) {
+    out[0] = (uint32_t)sb.total; out[1] = (uint32_t)sb.offset; out[2] = (uint32_t)sb.len;
+  }
+  return out;
+}
+
 /* Full reset (RIS) plus a fresh render state, for the warm-up. */
 EXPORT(eng_reset) void eng_reset(Eng* e) {
   ghostty_terminal_reset(e->t);
@@ -589,6 +793,12 @@ EXPORT(eng_reset) void eng_reset(Eng* e) {
 
 EXPORT(eng_free) void eng_free(Eng* e) {
   if (!e) return;
+  ghostty_selection_gesture_event_free(e->gpress);
+  ghostty_selection_gesture_event_free(e->gdrag);
+  ghostty_selection_gesture_event_free(e->grelease);
+  ghostty_selection_gesture_free(e->gesture, e->t);
+  if (e->sel_text) ghostty_free(NULL, e->sel_text, e->sel_len);
+  if (e->ev) ghostty_free(NULL, e->ev, e->ev_cap);
   ghostty_key_event_free(e->kev);
   ghostty_key_encoder_free(e->kenc);
   ghostty_mouse_event_free(e->mev);

@@ -44,13 +44,29 @@ export class WorkerTerm {
     if (m.type === 'data') { this.opts.onData?.(m.bytes); return; }
     if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
     if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
+    if (m.type === 'bell') { this.opts.onBell?.(); return; }
+    if (m.type === 'cursor') { this.cursor = m; this.input?.cursor(m.x, m.y); return; }
+    if (m.type === 'selection') {
+      this.selection = m.text;
+      this.input?.setSelection(m.text);
+      if (m.copy) this.writeClipboard(m.text);
+      this.opts.onSelection?.(m.text);
+      return;
+    }
+    if (m.type === 'clipboard') {
+      // OSC 52 from the program. sip's osc52gate filters it on the server
+      // when the deployment says so; here it is only written.
+      if (this.opts.onClipboard) this.opts.onClipboard(m.text, m.location);
+      else if (m.location !== 'primary') this.writeClipboard(m.text);
+      return;
+    }
     if (m.type === 'options') { this.opts.onOptions?.(m.options); return; }
     if (m.type === 'closed') { this.opts.onClose?.(m.error); return; }
     if (m.type === 'ready') {
       this.cw = m.cw; this.ch = m.ch; this.renderer = m.renderer;
       this.canvas.style.width = `${(this.cols * m.cw) / this.dpr}px`;
       this.canvas.style.height = `${(this.rows * m.ch) / this.dpr}px`;
-      if (this.opts.input !== false) this.input = attachInput(this.canvas.parentElement, this.canvas, (msg) => this.worker.postMessage(msg), { cell: () => ({ cw: this.cw / this.dpr, ch: this.ch / this.dpr }), onKey: this.opts.onKey });
+      if (this.opts.input !== false) this.input = attachInput(this.canvas.parentElement, this.canvas, (msg) => this.worker.postMessage(msg), { cell: () => ({ cw: this.cw / this.dpr, ch: this.ch / this.dpr }), onKey: this.opts.onKey, preeditStyle: { font: `${this.opts.fontSize ?? 14}px ${JSON.stringify(this.opts.fontFamily || 'monospace')}, monospace`, color: '#fff', background: 'rgba(0,0,0,0.8)' } });
       this.readyResolve();
     } else if (m.type === 'written') {
       for (const id of m.ids) { const p = this.pending.get(id); this.pending.delete(id); p?.resolve(); }
@@ -99,6 +115,18 @@ export class WorkerTerm {
     this.renders = r.renders;
   }
 
+  /** Write text to the system clipboard; false if the browser refused. */
+  async writeClipboard(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch {}
+    // Insecure origin or no user gesture: the copy event path, which works
+    // only during a user gesture but needs no permission.
+    const prev = this.selection;
+    this.input?.setSelection(text);
+    try { return this.input?.copy() ?? false; } catch { return false; } finally { this.input?.setSelection(prev ?? ''); }
+  }
+  selectAll() { this.worker.postMessage({ type: 'selectAll' }); }
+  clearSelection() { this.worker.postMessage({ type: 'selectClear' }); }
+  setCopyOnSelect(on) { this.worker.postMessage({ type: 'options', copyOnSelect: on }); }
   scroll(delta) { this.worker.postMessage({ type: 'scroll', delta }); }
   /**
    * Open the connection inside the worker. transport: { kind: 'websocket' |

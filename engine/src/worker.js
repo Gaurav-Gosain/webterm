@@ -24,6 +24,8 @@ let gl, prog, vao, instBuf, atlasTex, flagTex, uni = {};
 let stageCtx, spr = 0, slotRows = 0;
 let fontFamily = 'monospace', fontPx = 14;
 let lastDraw = 0;
+let lastCur = [-1, -1, -1];
+let selecting = false, copyOnSelect = false;
 let conn = null, net = null, readOnly = false, observe = false, pingTimer = 0;
 const encoder = new TextEncoder();
 let scheduled = false, rafId = 0, renders = 0, heldSince = 0;
@@ -279,6 +281,10 @@ function draw(force) {
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
   renders++;
   lastDraw = performance.now();
+  if (cur[0] !== lastCur[0] || cur[1] !== lastCur[1] || cur[2] !== lastCur[2]) {
+    lastCur = [cur[0], cur[1], cur[2]];
+    self.postMessage({ type: 'cursor', x: cur[0], y: cur[1], visible: !!cur[2] });
+  }
   if (observe) self.postMessage({ type: 'frame', n: renders, t: performance.timeOrigin + lastDraw, cx: cur[0], cy: cur[1] });
   const dt = performance.now() - t0;
   T.drawMs += dt;
@@ -376,7 +382,26 @@ const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((p1, p
 // reports, pastes and the terminal's own replies (DA, DSR, ...). With a
 // connection the bytes go straight to the socket; without one they go to
 // the page, which forwards them itself.
+// Title, bell and clipboard events the terminal raised while parsing.
+function drainEvents() {
+  const len = x.eng_events_len(e);
+  if (!len) return;
+  const base = x.eng_events(e);
+  const view = new DataView(x.memory.buffer, base, len);
+  const mem = u8();
+  for (let o = 0; o < len;) {
+    const kind = view.getUint32(o, true), n = view.getUint32(o + 4, true);
+    const body = mem.subarray(base + o + 8, base + o + 8 + n);
+    if (kind === 1) self.postMessage({ type: 'title', title: decoder.decode(body) });
+    else if (kind === 2) self.postMessage({ type: 'bell' });
+    else if (kind === 3) self.postMessage({ type: 'clipboard', location: ['standard', 'selection', 'primary'][body[0]] ?? 'standard', text: decoder.decode(body.subarray(1)) });
+    o += 8 + ((n + 3) & ~3);
+  }
+  x.eng_events_clear(e);
+}
+
 function flushOut() {
+  drainEvents();
   const n = x.eng_out_len(e);
   if (!n) return;
   const p = x.eng_out(e);
@@ -386,6 +411,16 @@ function flushOut() {
   if (net) net.postMessage({ type: 'input', bytes }, [bytes.buffer]);
   else if (conn) conn.input(bytes);
   else self.postMessage({ type: 'data', bytes }, [bytes.buffer]);
+}
+
+// The page keeps a copy of the selected text so a copy event can fill the
+// clipboard synchronously, which also works on insecure origins.
+const MAX_SELECTION = 4 * 1024 * 1024;
+function postSelection() {
+  const n = x.eng_selection_text(e);
+  const p = x.eng_selection_ptr(e);
+  const text = n && n <= MAX_SELECTION ? decoder.decode(u8().subarray(p, p + n)) : '';
+  self.postMessage({ type: 'selection', text, copy: copyOnSelect && !!text });
 }
 
 // After output was parsed: replies out, and a frame if one is overdue.
@@ -535,6 +570,41 @@ self.onmessage = async ({ data: m }) => {
       case 'focus':
         x.eng_focus(e, m.focused ? 1 : 0);
         flushOut();
+        break;
+      case 'pointer': {
+        // The program gets mouse reports when it asked for them, unless shift
+        // is held; otherwise the left button selects text.
+        const px = m.x * dpr, py = m.y * dpr;
+        if (!selecting && x.eng_mouse_tracking(e) && !(m.mods & 1)) {
+          x.eng_mouse(e, m.action, m.button, m.mods, px, py, m.pressed ? 1 : 0);
+          flushOut();
+          break;
+        }
+        if (m.action === 0 && m.button === 1) {
+          selecting = true;
+          x.eng_select(e, 0, px, py, m.t, 0);
+        } else if (m.action === 2 && selecting) {
+          x.eng_select(e, 1, px, py, m.t, m.mods & 4 ? 1 : 0);
+        } else if (m.action === 1 && selecting) {
+          selecting = false;
+          x.eng_select(e, 2, px, py, m.t, 0);
+          postSelection();
+        } else break;
+        draw(true);
+        break;
+      }
+      case 'selectAll':
+        x.eng_select_all(e);
+        postSelection();
+        draw(true);
+        break;
+      case 'selectClear':
+        x.eng_select_clear(e);
+        postSelection();
+        draw(true);
+        break;
+      case 'options':
+        if ('copyOnSelect' in m) copyOnSelect = !!m.copyOnSelect;
         break;
       case 'mouse':
         // Coordinates in CSS pixels; the engine works in canvas pixels.
