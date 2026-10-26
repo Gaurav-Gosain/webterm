@@ -593,6 +593,7 @@ function postSelection() {
 // After output was parsed: replies out, and a frame if one is overdue.
 function afterOutput() {
   flushOut();
+  searchAfterOutput();
   if (performance.now() - lastDraw > FRAME_MS) {
     if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
     draw(false);
@@ -672,6 +673,28 @@ function setHover(h) {
 
 function openable(uri) {
   try { return OPEN_SCHEMES.has(new URL(uri).protocol); } catch { return false; }
+}
+
+// ---- search ---------------------------------------------------------------
+// Ghostty's search covers the screen and the whole scrollback. Work is done
+// in bounded steps between messages so a long history never stalls output.
+let searchOpen = false, searchTimer = 0, searchFed = 0;
+function searchState(ptr) {
+  const [status, total, index] = new Uint32Array(x.memory.buffer, ptr, 3);
+  return { total, index: index === 0xFFFFFFFF ? -1 : index, done: status === 2 };
+}
+function searchPump() {
+  searchTimer = 0;
+  if (!searchOpen) return;
+  const st = searchState(x.eng_search_step(e, 64));
+  searchFed = performance.now();
+  self.postMessage({ type: 'search', ...st });
+  draw(true);
+  if (!st.done) searchTimer = setTimeout(searchPump, 0);
+}
+function searchAfterOutput() {
+  // New output can add or move matches: feed again, at most every 100 ms.
+  if (searchOpen && !searchTimer) searchTimer = setTimeout(searchPump, Math.max(0, 100 - (performance.now() - searchFed)));
 }
 
 self.onmessage = async ({ data: m }) => {
@@ -840,6 +863,20 @@ self.onmessage = async ({ data: m }) => {
           linkPress = null;
         } else break;
         draw(true);
+        break;
+      }
+      case 'search': {
+        const st = searchState(x.eng_search(e, stage(m.needle || '')));
+        searchOpen = !!m.needle;
+        clearTimeout(searchTimer); searchTimer = 0;
+        if (searchOpen) searchPump(); else draw(true);
+        self.postMessage({ type: 'result', id: m.id, value: st });
+        break;
+      }
+      case 'searchSelect': {
+        const st = searchState(x.eng_search_select(e, m.dir === 'prev' ? 2 : 1));
+        draw(true);
+        self.postMessage({ type: 'result', id: m.id, value: st });
         break;
       }
       case 'selectAll':

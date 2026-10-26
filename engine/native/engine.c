@@ -125,6 +125,12 @@ typedef struct Eng {
   uint32_t* ph;     /* placeholder cells: x, y, image id, placement id, row, col */
   uint32_t ph_n, ph_cap;
   uint64_t gfx_gen;
+  /* search */
+  GhosttySearch search;
+  bool searching, searching_changed;
+  GhosttySelection* matches;
+  size_t matches_cap;
+  uint32_t hl_fg, hl_bg, hl_sel_fg, hl_sel_bg;
 } Eng;
 
 static void* xalloc(size_t n) {
@@ -519,6 +525,8 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG, (const void*)decode_png);
 #endif
   e->next_sixel_id = 0x7F000001u;
+  /* Search highlight colours (r low): yellow, and orange for the selected match. */
+  e->hl_fg = 0x000000; e->hl_bg = 0x5FD7FF; e->hl_sel_fg = 0x000000; e->hl_sel_bg = 0x0087FF;
   if (ghostty_kitty_graphics_placement_iterator_new(NULL, &e->pit)) return NULL;
   if (ghostty_selection_gesture_new(NULL, &e->gesture) ||
       ghostty_selection_gesture_event_new(NULL, &e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS) ||
@@ -743,6 +751,90 @@ static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors
   return true;
 }
 
+/* ---- search ---------------------------------------------------------- */
+/* Paint the matches in view: every match in the highlight colours, the
+ * selected one in the selected colours. Runs after the rows are built. */
+static void paint_range(Eng* e, GhosttyGridRef* a, GhosttyGridRef* b, uint32_t fg, uint32_t bg) {
+  GhosttyPointCoordinate p0, p1;
+  if (ghostty_terminal_point_from_grid_ref(e->t, a, GHOSTTY_POINT_TAG_VIEWPORT, &p0) ||
+      ghostty_terminal_point_from_grid_ref(e->t, b, GHOSTTY_POINT_TAG_VIEWPORT, &p1))
+    return;
+  if (p1.y < p0.y || (p1.y == p0.y && p1.x < p0.x)) { GhosttyPointCoordinate t = p0; p0 = p1; p1 = t; }
+  for (uint32_t y = p0.y; y <= p1.y && y < e->rows; y++) {
+    uint32_t x0 = y == p0.y ? p0.x : 0, x1 = y == p1.y ? p1.x : e->cols - 1u;
+    uint32_t* row = e->inst + (size_t)y * e->cols * 3;
+    for (uint32_t x = x0; x <= x1 && x < e->cols; x++) { row[x * 3 + 1] = fg; row[x * 3 + 2] = bg; }
+    e->row_dirty[y] = 1;
+  }
+}
+
+static void highlight_matches(Eng* e) {
+  GhosttySelectionBuffer buf = {.ptr = e->matches, .cap = e->matches_cap, .len = 0};
+  GhosttyResult r = ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &buf);
+  if (r == GHOSTTY_OUT_OF_SPACE) {
+    size_t cap = buf.len + 16;
+    if (e->matches) ghostty_free(NULL, (uint8_t*)e->matches, e->matches_cap * sizeof(GhosttySelection));
+    e->matches = (GhosttySelection*)xalloc(cap * sizeof(GhosttySelection));
+    e->matches_cap = e->matches ? cap : 0;
+    for (size_t i = 0; i < e->matches_cap; i++) e->matches[i] = (GhosttySelection)GHOSTTY_INIT_SIZED(GhosttySelection);
+    buf = (GhosttySelectionBuffer){.ptr = e->matches, .cap = e->matches_cap, .len = 0};
+    r = ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &buf);
+  }
+  if (r == GHOSTTY_SUCCESS)
+    for (size_t i = 0; i < buf.len; i++) paint_range(e, &e->matches[i].start, &e->matches[i].end, e->hl_fg, e->hl_bg);
+  GhosttySelection sel = GHOSTTY_INIT_SIZED(GhosttySelection);
+  if (ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_SELECTED_MATCH, &sel) == GHOSTTY_SUCCESS)
+    paint_range(e, &sel.start, &sel.end, e->hl_sel_fg, e->hl_sel_bg);
+}
+
+static uint32_t search_out[3]; /* status, total, selected index (UINT32_MAX for none) */
+static void search_report(Eng* e) {
+  GhosttySearchStatus st = GHOSTTY_SEARCH_STATUS_COMPLETE;
+  size_t total = 0, idx = 0;
+  ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_STATUS, &st);
+  ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_TOTAL_MATCHES, &total);
+  bool has = ghostty_search_get(e->search, GHOSTTY_SEARCH_DATA_SELECTED_INDEX, &idx) == GHOSTTY_SUCCESS;
+  search_out[0] = st;
+  search_out[1] = total > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)total;
+  search_out[2] = has ? (uint32_t)idx : 0xFFFFFFFFu;
+}
+
+/* Set the needle (the input buffer, len bytes; 0 closes the search). */
+EXPORT(eng_search) uint32_t* eng_search(Eng* e, uint32_t len) {
+  if (!e->search && ghostty_search_new(NULL, &e->search, e->t)) return search_out;
+  GhosttyString needle = {.ptr = e->in, .len = len};
+  ghostty_search_set(e->search, GHOSTTY_SEARCH_OPT_NEEDLE, len ? &needle : NULL);
+  e->searching = len != 0;
+  e->searching_changed = true;
+  search_report(e);
+  return search_out;
+}
+
+/* Bounded progress: one feed and up to `ticks` ticks. */
+EXPORT(eng_search_step) uint32_t* eng_search_step(Eng* e, uint32_t ticks) {
+  if (!e->searching) { search_out[0] = GHOSTTY_SEARCH_STATUS_COMPLETE; return search_out; }
+  ghostty_search_feed(e->search);
+  GhosttySearchStatus st = GHOSTTY_SEARCH_STATUS_RUNNING;
+  for (uint32_t i = 0; i < ticks && st == GHOSTTY_SEARCH_STATUS_RUNNING; i++)
+    if (ghostty_search_tick(e->search, &st)) break;
+  e->searching_changed = true;
+  search_report(e);
+  return search_out;
+}
+
+/* dir 1 next (older), 2 previous (newer). The viewport follows. */
+EXPORT(eng_search_select) uint32_t* eng_search_select(Eng* e, uint32_t dir) {
+  if (!e->searching) return search_out;
+  ghostty_search_set(e->search, dir == 1 ? GHOSTTY_SEARCH_OPT_SELECT_NEXT : GHOSTTY_SEARCH_OPT_SELECT_PREV, NULL);
+  e->searching_changed = true;
+  search_report(e);
+  return search_out;
+}
+
+EXPORT(eng_search_colors) void eng_search_colors(Eng* e, uint32_t fg, uint32_t bg, uint32_t sfg, uint32_t sbg) {
+  e->hl_fg = fg; e->hl_bg = bg; e->hl_sel_fg = sfg; e->hl_sel_bg = sbg;
+}
+
 /* Bits returned by eng_frame. */
 #define F_DRAW 1u
 #define F_ATLAS_RESET 2u
@@ -765,14 +857,17 @@ EXPORT(eng_frame) uint32_t eng_frame(Eng* e, uint32_t force) {
   e->cursor[3] = cur.visual_style; e->cursor[4] = cur.blinking;
   MEMSET(e->row_dirty, 0, e->rows);
   e->miss_n = 0;
-  if (dirty == GHOSTTY_RENDER_STATE_DIRTY_FALSE && !force) return ret | (cursor_changed ? F_DRAW : 0);
+  if (dirty == GHOSTTY_RENDER_STATE_DIRTY_FALSE && !force && !e->searching_changed) return ret | (cursor_changed ? F_DRAW : 0);
+  e->searching_changed = false;
   GhosttyRenderStateColors* colors = &g_colors;
   *colors = (GhosttyRenderStateColors)GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
   ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_COLORS, colors);
   e->colors[0] = rgb(colors->foreground);
   e->colors[1] = rgb(colors->background);
   e->colors[2] = colors->cursor_has_value ? rgb(colors->cursor) : rgb(colors->foreground);
-  bool all = force || dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL;
+  /* While a search is open its highlights move with every change, so every
+   * row is rebuilt (0.12 ms for 200x50). */
+  bool all = force || dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL || e->searching;
   for (int attempt = 0; attempt < 2; attempt++) {
     bool ok = true;
     ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &e->it);
@@ -797,6 +892,7 @@ EXPORT(eng_frame) uint32_t eng_frame(Eng* e, uint32_t force) {
     ret |= F_ATLAS_RESET;
     all = true;
   }
+  if (e->searching) highlight_matches(e);
   ghostty_render_state_clean(e->rs);
   e->stats[1]++;
   return ret | F_DRAW;
@@ -1347,6 +1443,8 @@ EXPORT(eng_reset) void eng_reset(Eng* e) {
 
 EXPORT(eng_free) void eng_free(Eng* e) {
   if (!e) return;
+  if (e->search) ghostty_search_free(e->search);
+  if (e->matches) ghostty_free(NULL, (uint8_t*)e->matches, e->matches_cap * sizeof(GhosttySelection));
   ghostty_kitty_graphics_placement_iterator_free(e->pit);
   if (e->gfx) ghostty_free(NULL, (uint8_t*)e->gfx, (size_t)e->gfx_cap * GFX_WORDS * 4);
   sixel_end(e, false);

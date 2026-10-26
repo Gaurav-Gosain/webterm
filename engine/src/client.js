@@ -45,6 +45,7 @@ export class WorkerTerm {
     if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
     if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
     if (m.type === 'bell') { this.opts.onBell?.(); return; }
+    if (m.type === 'search') { this.searchState = m; this.opts.onSearch?.(m); return; }
     if (m.type === 'hover') {
       this.hoveredLink = m.uri;
       this.canvas.style.cursor = m.uri ? 'pointer' : '';
@@ -138,6 +139,14 @@ export class WorkerTerm {
     this.input?.setSelection(text);
     try { return this.input?.copy() ?? false; } catch { return false; } finally { this.input?.setSelection(prev ?? ''); }
   }
+  /**
+   * Search the screen and scrollback (ASCII letters ignore case). Resolves
+   * with { total, index, done } after the first step; onSearch gets each
+   * later count while the search catches up. An empty needle closes it.
+   */
+  search(needle) { return this.request({ type: 'search', needle }); }
+  /** Select the next older match ('next') or newer match ('prev'). */
+  searchSelect(dir = 'next') { return this.request({ type: 'searchSelect', dir }); }
   selectAll() { this.worker.postMessage({ type: 'selectAll' }); }
   clearSelection() { this.worker.postMessage({ type: 'selectClear' }); }
   setCopyOnSelect(on) { this.worker.postMessage({ type: 'options', copyOnSelect: on }); }
