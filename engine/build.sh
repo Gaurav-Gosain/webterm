@@ -15,6 +15,8 @@ mkdir -p "$out"
 node "$here/scripts/gen-diacritics.mjs" "$GHOSTTY_SRC/src/terminal/kitty/graphics_unicode.zig" "$here/native/diacritics.h"
 node "$here/scripts/gen-keys.mjs" "$GHOSTTY_SRC/include/ghostty/vt/key/event.h" "$here/src/keys.js"
 node --no-warnings "$here/scripts/gen-transports.mjs"
+# XTERM_WEBGL: an unpacked @xterm/addon-webgl of the version webterm ships.
+[ -n "${XTERM_WEBGL:-}" ] && node --no-warnings "$here/scripts/gen-custom-glyphs.mjs" "$XTERM_WEBGL/src/customGlyphs"
 "$ZIG" cc -target wasm32-freestanding -O3 -mbulk-memory -msimd128 -nostdlib \
   -I"$GHOSTTY_SRC/include" \
   -DENGINE_PNG -I"$wuffs" -I"$GHOSTTY_SRC/pkg/wuffs/include" \
