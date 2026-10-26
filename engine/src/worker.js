@@ -46,6 +46,8 @@ uniform vec2 u_cell;
 uniform vec2 u_view;
 uniform int u_cols;
 uniform ivec4 u_cursor; // x, y, visible, style
+uniform ivec4 u_link; // row, first col, last col, on: the hovered link
+flat out int v_link;
 uniform vec3 u_curColor;
 flat out uint v_glyph;
 flat out vec3 v_fg;
@@ -65,6 +67,7 @@ void main() {
   v_fg = unpack(a_fg);
   v_bg = unpack(a_bg);
   v_cursor = (u_cursor.z != 0 && col == u_cursor.x && row == u_cursor.y) ? u_cursor.w + 1 : 0;
+  v_link = (u_link.w != 0 && row == u_link.x && col >= u_link.y && col <= u_link.z) ? 1 : 0;
   vec2 ndc = px / u_view * 2.0 - 1.0;
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
 }`;
@@ -84,6 +87,7 @@ flat in uint v_glyph;
 flat in vec3 v_fg;
 flat in vec3 v_bg;
 flat in int v_cursor;
+flat in int v_link;
 in vec2 v_local;
 out vec4 o;
 void over(inout vec4 f, vec3 c, float a) { f = vec4(mix(f.rgb, c, a), f.a + a * (1.0 - f.a)); }
@@ -105,7 +109,7 @@ void main() {
   uint ul = (v_glyph >> 22) & 7u;
   // SGR 4:1 single, 4:2 double, 4:3 curly, 4:4 dotted, 4:5 dashed
   bool line = y >= u_ulY && y < u_ulY + u_ulH;
-  if (ul == 1u && line) over(f, fg, 1.0);
+  if ((ul == 1u || v_link == 1) && line) over(f, fg, 1.0);
   if (ul == 2u && (line || (y >= u_ulY + 2.0 * u_ulH && y < u_ulY + 3.0 * u_ulH))) over(f, fg, 1.0);
   if (ul == 3u) {
     float wave = u_ulY + u_ulH + u_ulH * sin(xx / u_cell.x * 6.2831853);
@@ -175,7 +179,7 @@ function setupGL(canvas) {
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
   gl.useProgram(prog);
-  for (const n of ['u_cell', 'u_view', 'u_cols', 'u_cursor', 'u_curColor', 'u_atlas', 'u_flags', 'u_spr', 'u_ulY', 'u_ulH', 'u_mode']) uni[n] = gl.getUniformLocation(prog, n);
+  for (const n of ['u_cell', 'u_view', 'u_cols', 'u_cursor', 'u_curColor', 'u_atlas', 'u_flags', 'u_spr', 'u_ulY', 'u_ulH', 'u_mode', 'u_link']) uni[n] = gl.getUniformLocation(prog, n);
   vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
   instBuf = gl.createBuffer();
@@ -583,6 +587,7 @@ function postSelection() {
   const p = x.eng_selection_ptr(e);
   const text = n && n <= MAX_SELECTION ? decoder.decode(u8().subarray(p, p + n)) : '';
   self.postMessage({ type: 'selection', text, copy: copyOnSelect && !!text });
+  return text;
 }
 
 // After output was parsed: replies out, and a frame if one is overdue.
@@ -617,6 +622,56 @@ function resizeGrid(c, r) {
   conn?.resize(cols, rows, cols * cw, rows * ch);
   net?.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
   return true;
+}
+
+// ---- links ---------------------------------------------------------------
+// OSC 8 hyperlinks, and plain http(s) URLs found in the row's text. The
+// hovered link is underlined and the page shows a pointer; a click opens
+// it (ctrl or cmd click while the program tracks the mouse).
+const URL_RE = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/g;
+let hover = null, linkPress = null, rowCache = { row: -1, frame: -1, text: '', cols: null };
+const OPEN_SCHEMES = new Set(['http:', 'https:']);
+
+function plainLinkAt(col, row) {
+  if (rowCache.row !== row || rowCache.frame !== renders) {
+    const n = x.eng_row_text(e, row);
+    const p = x.eng_dump_ptr(e);
+    rowCache = { row, frame: renders, text: decoder.decode(u8().slice(p, p + n)), cols: new Uint16Array(x.memory.buffer, x.eng_row_cols(), n).slice() };
+  }
+  const { text, cols } = rowCache;
+  URL_RE.lastIndex = 0;
+  for (let mt; (mt = URL_RE.exec(text));) {
+    const b0 = encoder.encode(text.slice(0, mt.index)).length;
+    const b1 = b0 + encoder.encode(mt[0]).length - 1;
+    const x0 = cols[b0], x1 = cols[b1];
+    if (col >= x0 && col <= x1) return { uri: mt[0], row, x0, x1 };
+  }
+  return null;
+}
+
+function linkAt(col, row) {
+  const n = x.eng_link_at(e, col, row);
+  if (n) {
+    const uri = decoder.decode(u8().slice(x.eng_link_uri(), x.eng_link_uri() + n));
+    const r = new Uint32Array(x.memory.buffer, x.eng_link_range(), 2);
+    // Like xterm, only http and https hyperlinks are links.
+    return openable(uri) ? { uri, row, x0: r[0], x1: r[1], osc8: true } : null;
+  }
+  return plainLinkAt(col, row);
+}
+
+function setHover(h) {
+  const key = h ? `${h.uri}|${h.row}|${h.x0}|${h.x1}` : '';
+  const old = hover ? `${hover.uri}|${hover.row}|${hover.x0}|${hover.x1}` : '';
+  if (key === old) return;
+  hover = h;
+  gl.uniform4i(uni.u_link, h ? h.row : 0, h ? h.x0 : 0, h ? h.x1 : 0, h ? 1 : 0);
+  self.postMessage({ type: 'hover', uri: h ? h.uri : null });
+  draw(true);
+}
+
+function openable(uri) {
+  try { return OPEN_SCHEMES.has(new URL(uri).protocol); } catch { return false; }
 }
 
 self.onmessage = async ({ data: m }) => {
@@ -737,7 +792,25 @@ self.onmessage = async ({ data: m }) => {
         // The program gets mouse reports when it asked for them, unless shift
         // is held; otherwise the left button selects text.
         const px = m.x * dpr, py = m.y * dpr;
-        if (!selecting && x.eng_mouse_tracking(e) && !(m.mods & 1)) {
+        const col = Math.floor(px / cw), row = Math.floor(py / ch);
+        const inGrid = col >= 0 && row >= 0 && col < cols && row < rows;
+        const tracking = x.eng_mouse_tracking(e);
+        const linkMod = (m.mods & (2 | 8)) !== 0; // ctrl or cmd
+        // Links: hover while no button is down; a click on one opens it. When
+        // the program tracks the mouse, only a ctrl or cmd click does.
+        // Moves arrive at most once per frame, so a press re-reads the cell
+        // under it instead of trusting the last hover.
+        if ((m.action === 2 && !m.pressed && !selecting) || m.action === 0) setHover(inGrid && (!tracking || linkMod) ? linkAt(col, row) : null);
+        if (m.button === 1 && hover && (!tracking || linkMod)) {
+          if (m.action === 0) linkPress = { col, row, uri: hover.uri };
+          else if (m.action === 1 && linkPress && tracking) {
+            if (linkPress.col === col && linkPress.row === row && openable(linkPress.uri)) self.postMessage({ type: 'openLink', uri: linkPress.uri });
+            linkPress = null;
+            break;
+          }
+          if (tracking) break;
+        }
+        if (!selecting && tracking && !(m.mods & 1)) {
           x.eng_mouse(e, m.action, m.button, m.mods, px, py, m.pressed ? 1 : 0);
           flushOut();
           break;
@@ -760,7 +833,11 @@ self.onmessage = async ({ data: m }) => {
           selecting = false;
           clearInterval(autoscrollTimer); autoscrollTimer = 0;
           x.eng_select(e, 2, px, py, m.t, 0);
-          postSelection();
+          const selected = postSelection();
+          // A click on a link that did not select anything opens it.
+          if (linkPress && !selected && linkPress.col === col && linkPress.row === row && openable(linkPress.uri))
+            self.postMessage({ type: 'openLink', uri: linkPress.uri });
+          linkPress = null;
         } else break;
         draw(true);
         break;

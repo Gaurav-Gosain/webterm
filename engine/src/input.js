@@ -134,6 +134,7 @@ export function attachInput(host, canvas, post, opts = {}) {
     if (!move) requestAnimationFrame(() => { post(move); move = null; });
     move = { type: 'pointer', action: 2, button: b, mods: mods(ev), ...pos(ev), pressed: buttons ? 1 : 0, t: ev.timeStamp };
   });
+  on(canvas, 'pointerleave', () => { if (!buttons) post({ type: 'pointer', action: 2, button: 0, mods: 0, x: -1, y: -1, pressed: 0, t: performance.now() }); });
   on(canvas, 'contextmenu', (ev) => ev.preventDefault());
   let wheelAcc = 0;
   on(canvas, 'wheel', (ev) => {

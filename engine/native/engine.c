@@ -1063,6 +1063,87 @@ EXPORT(eng_scrollbar) uint32_t* eng_scrollbar(Eng* e) {
   return out;
 }
 
+static void dput(Eng* e, const void* p, size_t n);
+static void dbegin(Eng* e);
+
+/* ---- links ------------------------------------------------------------ */
+static uint8_t link_uri[4096];
+static uint32_t link_range[2];
+
+static bool cell_ref(Eng* e, uint32_t col, uint32_t row, GhosttyGridRef* ref) {
+  GhosttyPoint p = {.tag = GHOSTTY_POINT_TAG_VIEWPORT, .value = {.coordinate = {(uint16_t)col, row}}};
+  *ref = (GhosttyGridRef)GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  return ghostty_terminal_grid_ref(e->t, p, ref) == GHOSTTY_SUCCESS;
+}
+
+static size_t uri_at(Eng* e, uint32_t col, uint32_t row, uint8_t* buf, size_t cap) {
+  GhosttyGridRef ref;
+  size_t n = 0;
+  if (!cell_ref(e, col, row, &ref)) return 0;
+  if (ghostty_grid_ref_hyperlink_uri(&ref, buf, cap, &n) != GHOSTTY_SUCCESS) return 0;
+  return n;
+}
+
+/* The OSC 8 hyperlink under a viewport cell. Returns the URI length (the
+ * bytes are at eng_link_uri) and sets eng_link_range to the columns of
+ * the run of cells on this row that carry the same link. 0 for none. */
+EXPORT(eng_link_at) uint32_t eng_link_at(Eng* e, uint32_t col, uint32_t row) {
+  if (col >= e->cols || row >= e->rows) return 0;
+  size_t n = uri_at(e, col, row, link_uri, sizeof(link_uri));
+  if (!n) return 0;
+  static uint8_t other[sizeof(link_uri)];
+  uint32_t x0 = col, x1 = col;
+  while (x0 > 0) {
+    size_t m = uri_at(e, x0 - 1, row, other, sizeof(other));
+    if (m != n || __builtin_memcmp(other, link_uri, n)) break;
+    x0--;
+  }
+  while (x1 + 1 < e->cols) {
+    size_t m = uri_at(e, x1 + 1, row, other, sizeof(other));
+    if (m != n || __builtin_memcmp(other, link_uri, n)) break;
+    x1++;
+  }
+  link_range[0] = x0;
+  link_range[1] = x1;
+  return (uint32_t)n;
+}
+EXPORT(eng_link_uri) uint8_t* eng_link_uri(void) { return link_uri; }
+EXPORT(eng_link_range) uint32_t* eng_link_range(void) { return link_range; }
+
+/* The text of one viewport row as UTF-8 in the dump buffer, and for every
+ * byte the column it came from (eng_row_cols, u16), so a pattern found in
+ * the text maps back to cells. Wide characters cover two columns; the
+ * byte map gives the first. Returns the byte length. */
+static uint16_t* row_cols;
+EXPORT(eng_row_text) uint32_t eng_row_text(Eng* e, uint32_t row) {
+  dbegin(e);
+  if (!row_cols) row_cols = (uint16_t*)xalloc(4u << 21);
+  if (row >= e->rows) return 0;
+  /* During a synchronized-output hold the captured frame is what is on
+   * screen, so read that. */
+  if (!e->held) ghostty_render_state_update(e->rs, e->t);
+  ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &e->it);
+  for (uint32_t y = 0; y <= row; y++)
+    if (!ghostty_render_state_row_iterator_next(e->it)) return 0;
+  ghostty_render_state_row_get(e->it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &e->cells);
+  uint32_t x = 0;
+  while (ghostty_render_state_row_cells_next(e->cells) && x < e->cols) {
+    GhosttyCell raw = 0;
+    ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
+    uint32_t wide = C_WIDE(raw);
+    if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL) { x++; continue; }
+    uint8_t buf[256];
+    GhosttyBuffer text = {.ptr = buf, .cap = sizeof(buf), .len = 0};
+    ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &text);
+    uint32_t start = e->dump_len;
+    if (!text.len) dput(e, " ", 1); else dput(e, buf, text.len);
+    for (uint32_t k = start; k < e->dump_len; k++) row_cols[k] = (uint16_t)x;
+    x++;
+  }
+  return e->dump_len;
+}
+EXPORT(eng_row_cols) uint16_t* eng_row_cols(void) { return row_cols; }
+
 /* ---- graphics for the frame ---------------------------------------- */
 /* eng_gfx lists what to draw for images: kitty placements (sixel arrives
  * as one) and kitty unicode placeholder cells. Each entry is 10 words:
@@ -1413,6 +1494,7 @@ EXPORT(eng_dump_direct) uint8_t* eng_dump_direct(Eng* e) {
   return e->dump;
 }
 EXPORT(eng_dump_len) uint32_t eng_dump_len(Eng* e) { return e->dump_len; }
+EXPORT(eng_dump_ptr) uint8_t* eng_dump_ptr(Eng* e) { return e->dump; }
 
 /* Checks the hard-coded cell layout against the public getter. Returns 0
  * when they agree. */

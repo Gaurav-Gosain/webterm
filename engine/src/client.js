@@ -45,6 +45,20 @@ export class WorkerTerm {
     if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
     if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
     if (m.type === 'bell') { this.opts.onBell?.(); return; }
+    if (m.type === 'hover') {
+      this.hoveredLink = m.uri;
+      this.canvas.style.cursor = m.uri ? 'pointer' : '';
+      this.canvas.title = m.uri ?? '';
+      this.opts.onLinkHover?.(m.uri);
+      return;
+    }
+    if (m.type === 'openLink') {
+      // The click that asked for it was a moment ago, so the page still has
+      // user activation and the browser allows the new tab.
+      if (this.opts.onLinkOpen) this.opts.onLinkOpen(m.uri);
+      else { const w = window.open(m.uri, '_blank', 'noopener,noreferrer'); if (w) w.opener = null; }
+      return;
+    }
     if (m.type === 'cursor') { this.cursor = m; this.input?.cursor(m.x, m.y); return; }
     if (m.type === 'selection') {
       this.selection = m.text;
