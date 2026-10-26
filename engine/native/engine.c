@@ -1434,6 +1434,67 @@ EXPORT(eng_image) uint32_t* eng_image(Eng* e, uint32_t id) {
   return out;
 }
 
+/* ---- appearance ------------------------------------------------------ */
+static GhosttyColorRgb pal_buf[256];
+/* JS fills 256 r,g,b triples, then calls eng_apply_palette. */
+EXPORT(eng_palette_buf) uint8_t* eng_palette_buf(void) { return (uint8_t*)pal_buf; }
+EXPORT(eng_apply_palette) void eng_apply_palette(Eng* e) {
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, pal_buf);
+}
+
+/* The cursor a program gets back with CSI 0 q, applied now as well.
+ * style: 0 bar, 1 block, 2 underline, 3 hollow block. */
+EXPORT(eng_cursor_default) void eng_cursor_default(Eng* e, uint32_t style, uint32_t blink) {
+  GhosttyTerminalCursorStyle st = (GhosttyTerminalCursorStyle)style;
+  bool b = blink != 0;
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &st);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &b);
+  static const uint8_t reset[] = "\x1b[0 q";
+  ghostty_terminal_vt_write(e->t, reset, sizeof(reset) - 1);
+}
+
+EXPORT(eng_scrollback_lines) void eng_scrollback_lines(Eng* e, uint32_t lines) {
+  size_t n = lines;
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &n);
+}
+
+/* A new font: new cell size and a new atlas geometry. Every cached glyph
+ * is dropped; the next frame rebuilds all rows. Returns 0 on success. */
+EXPORT(eng_set_cell) uint32_t eng_set_cell(Eng* e, uint32_t cw, uint32_t ch, uint32_t atlas_w, uint32_t atlas_h) {
+  uint32_t spr = atlas_w / cw, max = spr * (atlas_h / ch);
+  if (max > I_SLOT_MASK) max = I_SLOT_MASK;
+  uint32_t* st = (uint32_t*)xalloc(4 * (size_t)max);
+  uint16_t* sl = (uint16_t*)xalloc(2 * (size_t)max);
+  if (!st || !sl) return 1;
+  ghostty_free(NULL, (uint8_t*)e->slot_text, 4 * (size_t)e->max_slots);
+  ghostty_free(NULL, (uint8_t*)e->slot_len, 2 * (size_t)e->max_slots);
+  e->slot_text = st;
+  e->slot_len = sl;
+  e->slots_per_row = spr;
+  e->max_slots = max;
+  e->cw = cw;
+  e->ch = ch;
+  atlas_reset(e);
+  ghostty_terminal_resize(e->t, e->cols, e->rows, cw, ch);
+  return 0;
+}
+
+/* xterm's clear(): the cursor's line becomes the first line, and the
+ * scrollback and everything above it are gone. */
+EXPORT(eng_clear_scrollback) void eng_clear_scrollback(Eng* e) {
+  ghostty_render_state_update(e->rs, e->t);
+  GhosttyRenderStateCursor cur = GHOSTTY_INIT_SIZED(GhosttyRenderStateCursor);
+  ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cur);
+  uint32_t y = cur.viewport_has_value ? cur.viewport_y : 0, x = cur.viewport_has_value ? cur.viewport_x : 0;
+  uint8_t buf[48];
+  size_t o = 0;
+  buf[o++] = 27; buf[o++] = '[';
+  if (y) { put_num(buf, &o, y); buf[o++] = 'S'; buf[o++] = 27; buf[o++] = '['; }
+  buf[o++] = '3'; buf[o++] = 'J';
+  buf[o++] = 27; buf[o++] = '['; buf[o++] = '1'; buf[o++] = ';'; put_num(buf, &o, x + 1); buf[o++] = 'H';
+  ghostty_terminal_vt_write(e->t, buf, o);
+}
+
 /* Full reset (RIS) plus a fresh render state, for the warm-up. */
 EXPORT(eng_reset) void eng_reset(Eng* e) {
   ghostty_terminal_reset(e->t);

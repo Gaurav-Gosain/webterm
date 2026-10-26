@@ -45,6 +45,13 @@ export class WorkerTerm {
     if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
     if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
     if (m.type === 'bell') { this.opts.onBell?.(); return; }
+    if (m.type === 'metrics') {
+      this.cw = m.cw; this.ch = m.ch;
+      this.canvas.style.width = `${(this.cols * m.cw) / this.dpr}px`;
+      this.canvas.style.height = `${(this.rows * m.ch) / this.dpr}px`;
+      this.opts.onMetrics?.(m);
+      return;
+    }
     if (m.type === 'search') { this.searchState = m; this.opts.onSearch?.(m); return; }
     if (m.type === 'hover') {
       this.hoveredLink = m.uri;
@@ -150,6 +157,21 @@ export class WorkerTerm {
   selectAll() { this.worker.postMessage({ type: 'selectAll' }); }
   clearSelection() { this.worker.postMessage({ type: 'selectClear' }); }
   setCopyOnSelect(on) { this.worker.postMessage({ type: 'options', copyOnSelect: on }); }
+  /**
+   * Change the look: theme (an xterm.js ITheme), fontSize, fontFamily, fonts
+   * ([{ url, weight, style }]), cursorStyle ('block' | 'bar' | 'underline'),
+   * cursorBlink, scrollback (lines). A new font changes the cell size; call
+   * fit() afterwards to keep the grid filling its host.
+   */
+  setOptions(o) { return this.request({ type: 'setOptions', ...o }); }
+  scrollToTop() { this.worker.postMessage({ type: 'scrollTo', where: 'top' }); }
+  scrollToBottom() { this.worker.postMessage({ type: 'scrollTo', where: 'bottom' }); }
+  /** xterm's clear(): keep the cursor's line as the first, drop the rest. */
+  clear() { this.worker.postMessage({ type: 'clearScrollback' }); }
+  paste(text) { this.worker.postMessage({ type: 'paste', text: String(text) }); }
+  blur() { this.input?.textarea.blur(); }
+  hasSelection() { return !!this.selection; }
+  getSelection() { return this.selection || ''; }
   /** Raw input for the program (a phone key bar, a page button). */
   sendInput(data) {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;

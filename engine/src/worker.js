@@ -697,6 +697,71 @@ function searchAfterOutput() {
   if (searchOpen && !searchTimer) searchTimer = setTimeout(searchPump, Math.max(0, 100 - (performance.now() - searchFed)));
 }
 
+// ---- appearance ------------------------------------------------------------
+const rgbOf = (v) => {
+  if (typeof v === 'number') return v;
+  const m = /^#?([0-9a-f]{6})/i.exec(String(v || ''));
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return ((n >> 16) & 255) | (((n >> 8) & 255) << 8) | ((n & 255) << 16); // r low
+};
+const ANSI = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
+const XTERM16 = [0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5, 0x7f7f7f, 0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff];
+let theme = { fg: 0xd0d0d0, bg: 0x101010, cursor: 0xffffff };
+
+// An xterm.js ITheme: foreground, background, cursor, the 16 named colours
+// and extendedAnsi for 16..255. Missing entries keep xterm's defaults.
+function applyTheme(t) {
+  const pal = new Uint8Array(x.memory.buffer, x.eng_palette_buf(), 768);
+  const put = (i, rgbLow) => { pal[i * 3] = rgbLow & 255; pal[i * 3 + 1] = (rgbLow >> 8) & 255; pal[i * 3 + 2] = (rgbLow >> 16) & 255; };
+  const hex = (n) => ((n >> 16) & 255) | (((n >> 8) & 255) << 8) | ((n & 255) << 16);
+  for (let i = 0; i < 16; i++) put(i, rgbOf(t[ANSI[i]]) ?? hex(XTERM16[i]));
+  const lv = [0, 95, 135, 175, 215, 255];
+  for (let i = 16; i < 232; i++) { const k = i - 16; put(i, lv[(k / 36) | 0] | (lv[((k / 6) | 0) % 6] << 8) | (lv[k % 6] << 16)); }
+  for (let i = 232; i < 256; i++) { const v = 8 + (i - 232) * 10; put(i, v | (v << 8) | (v << 16)); }
+  (t.extendedAnsi || []).forEach((c, i) => { const v = rgbOf(c); if (v != null && i + 16 < 256) put(i + 16, v); });
+  x.eng_apply_palette(e);
+  theme = { fg: rgbOf(t.foreground) ?? theme.fg, bg: rgbOf(t.background) ?? theme.bg, cursor: rgbOf(t.cursor) ?? rgbOf(t.foreground) ?? theme.cursor };
+  x.eng_theme(e, theme.fg, theme.bg, theme.cursor);
+}
+
+// A new font family or size: measure again, rebuild the atlas geometry and
+// the canvas, and tell the page the new cell size so it can fit the grid.
+async function applyFont(m) {
+  if (m.fontFamily) fontFamily = m.fontFamily;
+  if (m.fontSize) fontPx = Math.round(m.fontSize * dpr);
+  if (m.fonts) await loadFonts(m.fonts);
+  measure();
+  x.eng_set_cell(e, cw, ch, ATLAS_W, ATLAS_H);
+  spr = x.eng_slots_per_row(e);
+  slotRows = Math.floor(ATLAS_H / ch);
+  stageCtx = new OffscreenCanvas(STAGE_COLS * 2 * cw, STAGE_ROWS * ch).getContext('2d', { willReadFrequently: true });
+  stageCtx.fillStyle = '#fff';
+  stageCtx.textBaseline = 'alphabetic';
+  gl.deleteTexture(flagTex);
+  flagTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, flagTex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8UI, spr, slotRows);
+  for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+  clearAtlas();
+  gl.useProgram(prog);
+  gl.uniform2f(uni.u_cell, cw, ch);
+  gl.uniform1i(uni.u_spr, spr);
+  const ulH = Math.max(1, Math.round(dpr));
+  gl.uniform1f(uni.u_ulY, Math.min(ch - ulH, baseline + ulH));
+  gl.uniform1f(uni.u_ulH, ulH);
+  gl.canvas.width = cols * cw;
+  gl.canvas.height = rows * ch;
+  gl.uniform2f(uni.u_view, cols * cw, rows * ch);
+  gl.viewport(0, 0, cols * cw, rows * ch);
+  warmAscii();
+  draw(true);
+  self.postMessage({ type: 'metrics', cw, ch });
+}
+
+function warmAscii() { const n = x.eng_warm_ascii(e); if (n) raster(n); }
+
 self.onmessage = async ({ data: m }) => {
   try {
     switch (m.type) {
@@ -890,6 +955,23 @@ self.onmessage = async ({ data: m }) => {
         self.postMessage({ type: 'result', id: m.id, value: st });
         break;
       }
+      case 'setOptions': {
+        if (m.theme) applyTheme(m.theme);
+        if (m.cursorStyle || 'cursorBlink' in m) x.eng_cursor_default(e, { bar: 0, block: 1, underline: 2, outline: 3 }[m.cursorStyle || 'block'] ?? 1, m.cursorBlink ? 1 : 0);
+        if (m.scrollback) x.eng_scrollback_lines(e, m.scrollback);
+        if (m.fontSize || m.fontFamily || m.fonts) await applyFont(m);
+        draw(true);
+        self.postMessage({ type: 'result', id: m.id, value: true });
+        break;
+      }
+      case 'scrollTo':
+        x.eng_scroll(e, m.where === 'top' ? -(1 << 30) : 1 << 30);
+        draw(true);
+        break;
+      case 'clearScrollback':
+        x.eng_clear_scrollback(e);
+        draw(true);
+        break;
       case 'selectAll':
         x.eng_select_all(e);
         postSelection();
