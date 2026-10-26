@@ -46,10 +46,12 @@
 #define C_WIDE(r) ((uint32_t)(((r) >> 42) & 3u))
 
 #define PLACEHOLDER_CP 0x10EEEEu /* kitty graphics unicode placeholder */
-#define GT_CAP 32768u /* glyph table, power of two */
-#define ARENA_CAP (1u << 20)
+#define GT_CAP 32768u /* glyph table limit, power of two */
+#define GT_START 2048u /* initial glyph table, grows by doubling */
+#define ARENA_CAP (1u << 20) /* text arena limit */
+#define ARENA_START (32u << 10)
 #define MISS_CAP 4096u
-#define IN_CAP (1u << 20)
+#define IN_CAP (256u << 10) /* JS writes in slices of this size */
 
 #include "sixel.c"
 
@@ -89,6 +91,7 @@ typedef struct Eng {
   uint8_t* arena;
   uint32_t arena_len;
   uint32_t next_slot, max_slots, slots_per_row;
+  uint32_t gt_cap, arena_cap, gt_used;
   uint32_t atlas_gen;
   Miss* miss;
   uint32_t miss_n;
@@ -547,8 +550,12 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &gc);
   e->inst = xalloc((size_t)cols * rows * 12);
   e->row_dirty = xalloc(rows);
-  e->table = xalloc(sizeof(GEnt) * GT_CAP);
-  e->arena = xalloc(ARENA_CAP);
+  /* The glyph table and text arena start small and grow with use, so an
+   * idle terminal holds little wasm memory. */
+  e->gt_cap = GT_START;
+  e->arena_cap = ARENA_START;
+  e->table = xalloc(sizeof(GEnt) * e->gt_cap);
+  e->arena = xalloc(e->arena_cap);
   e->miss = xalloc(sizeof(Miss) * MISS_CAP);
   e->in = xalloc(IN_CAP);
   e->slots_per_row = atlas_w / cw;
@@ -612,7 +619,8 @@ static size_t utf8(uint32_t cp, uint8_t* o) {
 }
 
 static void atlas_reset(Eng* e) {
-  MEMSET(e->table, 0, sizeof(GEnt) * GT_CAP);
+  MEMSET(e->table, 0, sizeof(GEnt) * e->gt_cap);
+  e->gt_used = 0;
   e->arena_len = 0;
   e->next_slot = 1;
   e->miss_n = 0;
@@ -621,20 +629,59 @@ static void atlas_reset(Eng* e) {
 
 /* Returns the slot, or 0 when the atlas is full (the caller resets and
  * rebuilds the frame). style: bit0 bold, bit1 italic. */
+static uint32_t gt_hash(uint64_t key) { return (uint32_t)(key ^ (key >> 29) ^ (key >> 47)) * 2654435761u; }
+
+/* Double the glyph table (up to GT_CAP) and reinsert every entry. */
+static bool gt_grow(Eng* e) {
+  if (e->gt_cap >= GT_CAP) return false;
+  uint32_t cap = e->gt_cap * 2;
+  GEnt* t = (GEnt*)xalloc(sizeof(GEnt) * cap);
+  if (!t) return false;
+  for (uint32_t k = 0; k < e->gt_cap; k++) {
+    if (!e->table[k].used) continue;
+    uint32_t h = gt_hash(e->table[k].key);
+    for (uint32_t i = 0;; i++) {
+      GEnt* g = &t[(h + i) & (cap - 1)];
+      if (!g->used) { *g = e->table[k]; break; }
+    }
+  }
+  ghostty_free(NULL, (uint8_t*)e->table, sizeof(GEnt) * e->gt_cap);
+  e->table = t;
+  e->gt_cap = cap;
+  return true;
+}
+
+static bool arena_grow(Eng* e, size_t need) {
+  uint32_t cap = e->arena_cap;
+  while (cap < e->arena_len + need && cap < ARENA_CAP) cap *= 2;
+  if (cap < e->arena_len + need) return false;
+  uint8_t* a = (uint8_t*)xalloc(cap);
+  if (!a) return false;
+  MEMCPY(a, e->arena, e->arena_len);
+  ghostty_free(NULL, e->arena, e->arena_cap);
+  e->arena = a;
+  e->arena_cap = cap;
+  return true;
+}
+
 static uint32_t glyph(Eng* e, uint64_t key, const uint8_t* text, size_t len, uint32_t width,
                       uint32_t style, bool* full) {
-  uint32_t h = (uint32_t)(key ^ (key >> 29) ^ (key >> 47)) * 2654435761u;
+  uint32_t h = gt_hash(key);
   for (uint32_t i = 0;; i++) {
-    GEnt* g = &e->table[(h + i) & (GT_CAP - 1)];
+    GEnt* g = &e->table[(h + i) & (e->gt_cap - 1)];
     if (!g->used) {
-      /* miss: allocate */
+      /* miss: allocate, growing the table at half load and the arena when
+       * full, up to their limits */
+      if (e->gt_used + 1 > e->gt_cap / 2 && gt_grow(e)) return glyph(e, key, text, len, width, style, full);
+      if (e->arena_len + len > e->arena_cap) arena_grow(e, len);
       uint32_t slot = e->next_slot;
       if (width == 2 && (slot % e->slots_per_row) == e->slots_per_row - 1) slot++;
-      if (slot + width > e->max_slots || e->arena_len + len > ARENA_CAP ||
-          e->miss_n >= MISS_CAP || i > GT_CAP / 2) {
+      if (slot + width > e->max_slots || e->arena_len + len > e->arena_cap ||
+          e->miss_n >= MISS_CAP || i > e->gt_cap / 2) {
         *full = true;
         return 0;
       }
+      e->gt_used++;
       e->next_slot = slot + width;
       g->used = 1;
       g->key = key;
@@ -1211,10 +1258,12 @@ EXPORT(eng_link_range) uint32_t* eng_link_range(void) { return link_range; }
  * the text maps back to cells. Wide characters cover two columns; the
  * byte map gives the first. Returns the byte length. */
 static uint16_t* row_cols;
+static uint8_t* row_buf;
+#define ROW_BUF (64u << 10)
 EXPORT(eng_row_text) uint32_t eng_row_text(Eng* e, uint32_t row) {
-  dbegin(e);
-  if (!row_cols) row_cols = (uint16_t*)xalloc(4u << 21);
-  if (row >= e->rows) return 0;
+  if (!row_cols) row_cols = (uint16_t*)xalloc(2u * ROW_BUF);
+  if (!row_buf) row_buf = (uint8_t*)xalloc(ROW_BUF);
+  if (!row_cols || !row_buf || row >= e->rows) return 0;
   /* During a synchronized-output hold the captured frame is what is on
    * screen, so read that. */
   if (!e->held) ghostty_render_state_update(e->rs, e->t);
@@ -1222,22 +1271,24 @@ EXPORT(eng_row_text) uint32_t eng_row_text(Eng* e, uint32_t row) {
   for (uint32_t y = 0; y <= row; y++)
     if (!ghostty_render_state_row_iterator_next(e->it)) return 0;
   ghostty_render_state_row_get(e->it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &e->cells);
-  uint32_t x = 0;
+  uint32_t x = 0, n = 0;
   while (ghostty_render_state_row_cells_next(e->cells) && x < e->cols) {
     GhosttyCell raw = 0;
     ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
-    uint32_t wide = C_WIDE(raw);
-    if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL) { x++; continue; }
+    if (C_WIDE(raw) == GHOSTTY_CELL_WIDE_SPACER_TAIL) { x++; continue; }
     uint8_t buf[256];
     GhosttyBuffer text = {.ptr = buf, .cap = sizeof(buf), .len = 0};
     ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &text);
-    uint32_t start = e->dump_len;
-    if (!text.len) dput(e, " ", 1); else dput(e, buf, text.len);
-    for (uint32_t k = start; k < e->dump_len; k++) row_cols[k] = (uint16_t)x;
+    size_t len = text.len ? text.len : 1;
+    if (n + len > ROW_BUF) break;
+    if (text.len) MEMCPY(row_buf + n, buf, len); else row_buf[n] = ' ';
+    for (uint32_t k = n; k < n + len; k++) row_cols[k] = (uint16_t)x;
+    n += (uint32_t)len;
     x++;
   }
-  return e->dump_len;
+  return n;
 }
+EXPORT(eng_row_ptr) uint8_t* eng_row_ptr(void) { return row_buf; }
 EXPORT(eng_row_cols) uint16_t* eng_row_cols(void) { return row_cols; }
 
 /* ---- graphics for the frame ---------------------------------------- */
@@ -1527,8 +1578,8 @@ EXPORT(eng_free) void eng_free(Eng* e) {
   ghostty_terminal_free(e->t);
   ghostty_free(NULL, (uint8_t*)e->inst, (size_t)e->cols * e->rows * 12);
   ghostty_free(NULL, e->row_dirty, e->rows);
-  ghostty_free(NULL, (uint8_t*)e->table, sizeof(GEnt) * GT_CAP);
-  ghostty_free(NULL, e->arena, ARENA_CAP);
+  ghostty_free(NULL, (uint8_t*)e->table, sizeof(GEnt) * e->gt_cap);
+  ghostty_free(NULL, e->arena, e->arena_cap);
   ghostty_free(NULL, (uint8_t*)e->miss, sizeof(Miss) * MISS_CAP);
   ghostty_free(NULL, e->in, IN_CAP);
   ghostty_free(NULL, (uint8_t*)e->slot_text, 4 * (size_t)e->max_slots);

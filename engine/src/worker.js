@@ -213,6 +213,16 @@ function setupGL(canvas) {
   gl.uniform1f(uni.u_ulH, ulH);
   gl.viewport(0, 0, cols * cw, rows * ch);
   gl.uniform1i(uni.u_mode, 0);
+  gl.bindVertexArray(vao);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  iprog = null;
+  return true;
+}
+
+// The image program is built the first time an image is drawn, so a terminal
+// that never shows one never compiles it.
+function ensureImageGL() {
+  if (iprog) return;
   // Image program: one instanced quad per placement or placeholder cell.
   iprog = gl.createProgram();
   gl.attachShader(iprog, compile(gl.VERTEX_SHADER, IVS));
@@ -230,8 +240,6 @@ function setupGL(canvas) {
     gl.vertexAttribDivisor(i, 1);
   }
   gl.bindVertexArray(vao);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  return true;
 }
 
 // A lost WebGL context (GPU reset, driver update, too many contexts) comes
@@ -286,6 +294,7 @@ function imageTexture(id) {
 
 // Draw the entries of one layer, grouped by image so each texture binds once.
 function drawImages(list, layer) {
+  ensureImageGL();
   let any = false;
   gl.useProgram(iprog);
   gl.bindVertexArray(ivao);
@@ -794,7 +803,7 @@ const OPEN_SCHEMES = new Set(['http:', 'https:']);
 function plainLinkAt(col, row) {
   if (rowCache.row !== row || rowCache.frame !== renders) {
     const n = x.eng_row_text(e, row);
-    const p = x.eng_dump_ptr(e);
+    const p = x.eng_row_ptr();
     rowCache = { row, frame: renders, text: decoder.decode(u8().slice(p, p + n)), cols: new Uint16Array(x.memory.buffer, x.eng_row_cols(), n).slice() };
   }
   const { text, cols } = rowCache;
@@ -945,7 +954,7 @@ self.onmessage = async ({ data: m }) => {
         // braille) costs about 10 ms while the browser loads that font.
         // Pay it here, while wasm compiles on another thread, instead of in
         // the middle of the first burst of output.
-        warmFallbackFonts();
+        if (m.warmFonts) warmFallbackFonts();
         const res = await loading;
         x = res.instance.exports;
         e = x.eng_new(cols, rows, m.scrollback ?? 10000, cw, ch, ATLAS_W, ATLAS_H);

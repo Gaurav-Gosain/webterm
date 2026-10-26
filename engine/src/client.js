@@ -56,7 +56,7 @@ export class WorkerTerm {
     this.worker.postMessage({
       type: 'init', canvas: off, cols: this.cols, rows: this.rows, dpr: this.dpr,
       scrollback: opts.scrollback ?? 10000, fontFamily: opts.fontFamily, fontSize: opts.fontSize ?? 14,
-      fonts: opts.fonts, theme: opts.theme, renderer: opts.renderer, debugNoWebGL2: !!opts.debugNoWebGL2, wasmUrl: String(opts.wasmUrl ?? new URL('../dist/engine.wasm', import.meta.url)),
+      fonts: opts.fonts, theme: opts.theme, renderer: opts.renderer, debugNoWebGL2: !!opts.debugNoWebGL2, warmFonts: !!opts.warmFonts, wasmUrl: String(opts.wasmUrl ?? new URL('../dist/engine.wasm', import.meta.url)),
     }, [off]);
   }
 
