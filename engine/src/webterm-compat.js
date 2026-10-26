@@ -53,6 +53,11 @@ export class EngineWebTerm {
       fontSize: o.fontSize ?? 14,
       fonts,
       scrollback: o.scrollback ?? 5000,
+      // A page that moves the files (sip flattens them into one directory)
+      // says where the wasm and the workers are.
+      wasmUrl: o.engine?.wasmUrl,
+      workerUrl: o.engine?.workerUrl,
+      netWorkerUrl: o.engine?.netWorkerUrl,
       theme: [num(theme.foreground, 0xd0d0d0), num(theme.background, 0x101010), num(theme.cursor || theme.foreground, 0xffffff)],
       onData: (bytes) => {
         if (this.options.input?.readOnly || !this.transport) return;
