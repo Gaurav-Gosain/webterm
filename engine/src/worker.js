@@ -4,11 +4,17 @@
 // the atlas, uploads the dirty row ranges straight out of wasm memory, and
 // issues one instanced draw. No cell ever becomes a JS object.
 
+import { KEYS } from './keys.js';
+import { openTransport } from './transport.js';
+
 const ATLAS_W = 2048, ATLAS_H = 1024;
 const F_DRAW = 1, F_ATLAS_RESET = 2, F_HELD = 4;
 const HOLD_LIMIT_MS = 1000;
 const ACK_BYTES = 256 * 1024;
 const FRAME_MS = 16;
+// Inside one large batch the screen is still mid-flood: 30 fps keeps it
+// moving and leaves more of the thread to the parser.
+const FLOOD_FRAME_MS = 33;
 const WARM_PASSES = 12;
 
 let x; // wasm exports
@@ -18,9 +24,11 @@ let gl, prog, vao, instBuf, atlasTex, flagTex, uni = {};
 let stageCtx, spr = 0, slotRows = 0;
 let fontFamily = 'monospace', fontPx = 14;
 let lastDraw = 0;
+let conn = null, net = null, readOnly = false, observe = false, pingTimer = 0;
+const encoder = new TextEncoder();
 let scheduled = false, rafId = 0, renders = 0, heldSince = 0;
 const frameMs = [];
-const T = { warmMs: 0, writeMs: 0, drawMs: 0, rasterMs: 0, msgs: 0, misses: 0 };
+const T = { warmMs: 0, bytes: 0, writeMs: 0, drawMs: 0, rasterMs: 0, msgs: 0, misses: 0 };
 const raf = self.requestAnimationFrame ? (f) => self.requestAnimationFrame(f) : (f) => setTimeout(() => f(performance.now()), 16);
 const decoder = new TextDecoder();
 
@@ -271,6 +279,7 @@ function draw(force) {
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
   renders++;
   lastDraw = performance.now();
+  if (observe) self.postMessage({ type: 'frame', n: renders, t: performance.timeOrigin + lastDraw, cx: cur[0], cy: cur[1] });
   const dt = performance.now() - t0;
   T.drawMs += dt;
   frameMs.push(dt);
@@ -291,14 +300,24 @@ function schedule() {
 function writeBytes(bytes) {
   const tw = performance.now();
   T.msgs++;
-  const cap = x.eng_input_cap();
+  T.bytes += bytes.length;
+  // Parse in slices of at most 256 KiB and draw between slices when a frame
+  // is overdue, so one large batch cannot hold the screen still.
+  const cap = Math.min(x.eng_input_cap(), 256 * 1024);
   const inPtr = x.eng_input(e);
+  let drawMs = 0;
   for (let off = 0; off < bytes.length; off += cap) {
     const n = Math.min(cap, bytes.length - off);
     u8().set(bytes.subarray(off, off + n), inPtr);
     x.eng_write_input(e, n);
+    if (off + n < bytes.length && performance.now() - lastDraw > FLOOD_FRAME_MS) {
+      const d0 = performance.now();
+      flushOut();
+      draw(false);
+      drawMs += performance.now() - d0;
+    }
   }
-  T.writeMs += performance.now() - tw;
+  T.writeMs += performance.now() - tw - drawMs;
 }
 
 // Two warm-ups before "ready", both cheap and both paid once:
@@ -352,6 +371,56 @@ async function loadFonts(fonts) {
 }
 
 const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((p1, p2) => p1 - p2); return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(3); };
+
+// Send whatever the engine queued for the PTY: encoded keys, mouse
+// reports, pastes and the terminal's own replies (DA, DSR, ...). With a
+// connection the bytes go straight to the socket; without one they go to
+// the page, which forwards them itself.
+function flushOut() {
+  const n = x.eng_out_len(e);
+  if (!n) return;
+  const p = x.eng_out(e);
+  const bytes = u8().slice(p, p + n);
+  x.eng_out_clear(e);
+  if (readOnly) return;
+  if (net) net.postMessage({ type: 'input', bytes }, [bytes.buffer]);
+  else if (conn) conn.input(bytes);
+  else self.postMessage({ type: 'data', bytes }, [bytes.buffer]);
+}
+
+// After output was parsed: replies out, and a frame if one is overdue.
+function afterOutput() {
+  flushOut();
+  if (performance.now() - lastDraw > FRAME_MS) {
+    if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
+    draw(false);
+  } else schedule();
+}
+
+// Stage text in the engine's input buffer and return its byte length.
+function stage(text) {
+  if (!text) return 0;
+  const b = encoder.encode(text);
+  const n = Math.min(b.length, x.eng_input_cap());
+  u8().set(b.subarray(0, n), x.eng_input(e));
+  return n;
+}
+
+function resizeGrid(c, r) {
+  if (x.eng_resize(e, c, r)) return false;
+  cols = c; rows = r;
+  gl.canvas.width = cols * cw;
+  gl.canvas.height = rows * ch;
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, cols * rows * 12, gl.DYNAMIC_DRAW);
+  gl.uniform2f(uni.u_view, cols * cw, rows * ch);
+  gl.uniform1i(uni.u_cols, cols);
+  gl.viewport(0, 0, cols * cw, rows * ch);
+  draw(true);
+  conn?.resize(cols, rows, cols * cw, rows * ch);
+  net?.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
+  return true;
+}
 
 self.onmessage = async ({ data: m }) => {
   try {
@@ -410,14 +479,87 @@ self.onmessage = async ({ data: m }) => {
         }
         self.postMessage({ type: 'written', ids: m.ids.slice(from) });
         // A flood of write messages can keep the worker busy past its
-        // animation frames. Draw here when a frame is overdue, so the screen
-        // keeps moving at about 60 fps however fast the bytes arrive.
-        if (performance.now() - lastDraw > FRAME_MS) {
-          if (scheduled) { (self.cancelAnimationFrame || clearTimeout)(rafId); scheduled = false; }
-          draw(false);
-        } else schedule();
+        // animation frames. afterOutput draws when a frame is overdue, so
+        // the screen keeps moving at about 60 fps however fast bytes arrive.
+        afterOutput();
         break;
       }
+      case 'connect': {
+        // The socket lives here: PTY output goes from the network straight
+        // into wasm, and input goes from wasm straight to the network.
+        conn = openTransport(m.transport, {
+          output: (bytes) => { writeBytes(bytes); afterOutput(); },
+          title: (title) => self.postMessage({ type: 'title', title }),
+          options: (o) => { readOnly = !!o.readOnly; self.postMessage({ type: 'options', options: o }); },
+          closed: (err) => { clearInterval(pingTimer); self.postMessage({ type: 'closed', error: err ? String(err) : undefined }); },
+          open: () => {
+            conn.resize(cols, rows, cols * cw, rows * ch);
+            if (m.transport.pingMs) pingTimer = setInterval(() => conn.ping(), m.transport.pingMs);
+          },
+        });
+        await conn.ready;
+        self.postMessage({ type: 'result', id: m.id, value: true });
+        break;
+      }
+      case 'net': {
+        // The socket lives in the network worker; this port carries its
+        // output here and our input there.
+        net = m.port;
+        net.onmessage = ({ data: d }) => {
+          if (d.type === 'output') { writeBytes(d.bytes); net.postMessage({ type: 'ack' }); afterOutput(); }
+          else if (d.type === 'open') net.postMessage({ type: 'resize', cols, rows, widthPx: cols * cw, heightPx: rows * ch });
+          else if (d.type === 'options') { readOnly = !!d.options.readOnly; self.postMessage(d); }
+          else self.postMessage(d); // title, closed
+        };
+        break;
+      }
+      case 'key': {
+        // A DOM key event. Ghostty's encoder applies the terminal's modes
+        // (cursor keys, keypad, kitty keyboard flags, modifyOtherKeys).
+        const n = stage(m.text);
+        x.eng_key(e, KEYS[m.code] ?? 0, m.mods, m.action, n, m.unshifted || 0, m.composing ? 1 : 0);
+        flushOut();
+        schedule();
+        break;
+      }
+      case 'text':
+        x.eng_text(e, stage(m.text));
+        flushOut();
+        schedule();
+        break;
+      case 'paste':
+        x.eng_paste(e, stage(m.text));
+        flushOut();
+        schedule();
+        break;
+      case 'focus':
+        x.eng_focus(e, m.focused ? 1 : 0);
+        flushOut();
+        break;
+      case 'mouse':
+        // Coordinates in CSS pixels; the engine works in canvas pixels.
+        x.eng_mouse(e, m.action, m.button, m.mods, m.x * dpr, m.y * dpr, m.pressed ? 1 : 0);
+        flushOut();
+        break;
+      case 'wheel': {
+        // Mouse reports when the program tracks the mouse, otherwise the
+        // viewport scrolls through history.
+        if (x.eng_mouse_tracking(e)) {
+          const button = m.lines < 0 ? 4 : 5;
+          for (let i = 0; i < Math.min(Math.abs(m.lines), 10); i++) x.eng_mouse(e, 0, button, m.mods, m.x * dpr, m.y * dpr, 0);
+          flushOut();
+        } else {
+          x.eng_scroll(e, m.lines);
+          schedule();
+        }
+        break;
+      }
+      case 'resize':
+        self.postMessage({ type: 'result', id: m.id, value: resizeGrid(m.cols, m.rows) });
+        break;
+      case 'observe':
+        observe = !!m.on;
+        break;
       case 'scroll':
         x.eng_scroll(e, m.delta);
         schedule();

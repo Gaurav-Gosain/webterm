@@ -3,6 +3,8 @@
 // worker boundary once, and resolves each write() after its bytes are
 // parsed. Rendering never touches this thread.
 
+import { attachInput } from './input.js';
+
 export class WorkerTerm {
   static async mount(host, opts = {}) {
     const t = new WorkerTerm(host, opts);
@@ -39,10 +41,16 @@ export class WorkerTerm {
   }
 
   onMessage(m) {
+    if (m.type === 'data') { this.opts.onData?.(m.bytes); return; }
+    if (m.type === 'frame') { this.opts.onFrame?.(m); return; }
+    if (m.type === 'title') { this.opts.onTitle?.(m.title); return; }
+    if (m.type === 'options') { this.opts.onOptions?.(m.options); return; }
+    if (m.type === 'closed') { this.opts.onClose?.(m.error); return; }
     if (m.type === 'ready') {
       this.cw = m.cw; this.ch = m.ch; this.renderer = m.renderer;
       this.canvas.style.width = `${(this.cols * m.cw) / this.dpr}px`;
       this.canvas.style.height = `${(this.rows * m.ch) / this.dpr}px`;
+      if (this.opts.input !== false) this.input = attachInput(this.canvas.parentElement, this.canvas, (msg) => this.worker.postMessage(msg), { cell: () => ({ cw: this.cw / this.dpr, ch: this.ch / this.dpr }), onKey: this.opts.onKey });
       this.readyResolve();
     } else if (m.type === 'written') {
       for (const id of m.ids) { const p = this.pending.get(id); this.pending.delete(id); p?.resolve(); }
@@ -92,8 +100,41 @@ export class WorkerTerm {
   }
 
   scroll(delta) { this.worker.postMessage({ type: 'scroll', delta }); }
+  /**
+   * Open the connection inside the worker. transport: { kind: 'websocket' |
+   * 'webtransport', url, protocol: 'sip' | 'raw', options (WebTransport
+   * constructor options, e.g. serverCertificateHashes), pingMs }.
+   */
+  connect(transport, { thread = 'net' } = {}) {
+    if (thread === 'engine') return this.request({ type: 'connect', transport });
+    // Default: a third thread owns the socket. Receiving a WebSocket message
+    // costs about 0.3 ms per 64 KiB on the owning thread, so a separate
+    // network worker lets receive and parse run in parallel.
+    const ch = new MessageChannel();
+    this.net = new Worker(this.opts.netWorkerUrl ?? new URL('./net-worker.js', import.meta.url), { type: 'module' });
+    this.worker.postMessage({ type: 'net', port: ch.port1 }, [ch.port1]);
+    return new Promise((resolve, reject) => {
+      this.net.onmessage = ({ data: m }) => {
+        if (m.type === 'result') return m.error ? reject(new Error(m.error)) : resolve(true);
+        this.onMessage(m);
+      };
+      this.net.postMessage({ type: 'connect', transport, port: ch.port2 }, [ch.port2]);
+    });
+  }
+  async resize(cols, rows) {
+    const ok = await this.request({ type: 'resize', cols, rows });
+    if (ok) {
+      this.cols = cols; this.rows = rows;
+      this.canvas.style.width = `${(cols * this.cw) / this.dpr}px`;
+      this.canvas.style.height = `${(rows * this.ch) / this.dpr}px`;
+    }
+    return ok;
+  }
+  /** Ask the worker to report each drawn frame through onFrame. */
+  observe(on = true) { this.worker.postMessage({ type: 'observe', on }); }
+  focus() { this.input?.focus(); }
   stats() { return this.request({ type: 'stats' }); }
   /** kind 'render' reads the instance buffer, 'direct' reads Ghostty's cells. */
   dump(kind = 'render') { this.sendWrites(); return this.request({ type: 'dump', kind }); }
-  dispose() { this.worker.terminate(); this.canvas.remove(); }
+  dispose() { this.input?.detach(); this.net?.terminate(); this.worker.terminate(); this.canvas.remove(); }
 }

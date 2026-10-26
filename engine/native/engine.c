@@ -88,6 +88,14 @@ typedef struct Eng {
   uint8_t* dump;
   uint32_t dump_len;
   uint32_t stats[8];
+  /* bytes headed to the PTY: encoded keys, mouse, paste, focus, and the
+   * terminal's own replies (DA, DSR, ...) */
+  uint8_t* out;
+  uint32_t out_len, out_cap;
+  GhosttyKeyEncoder kenc;
+  GhosttyKeyEvent kev;
+  GhosttyMouseEncoder menc;
+  GhosttyMouseEvent mev;
 } Eng;
 
 static void* xalloc(size_t n) {
@@ -98,6 +106,27 @@ static void* xalloc(size_t n) {
 
 static uint32_t rgb(GhosttyColorRgb c) {
   return (uint32_t)c.r | ((uint32_t)c.g << 8) | ((uint32_t)c.b << 16);
+}
+
+static void out_put(Eng* e, const uint8_t* p, size_t n) {
+  if (!n) return;
+  if (e->out_len + n > e->out_cap) {
+    uint32_t cap = e->out_cap ? e->out_cap : 4096;
+    while (cap < e->out_len + n) cap *= 2;
+    uint8_t* next = ghostty_alloc(NULL, cap);
+    if (!next) return;
+    if (e->out_len) MEMCPY(next, e->out, e->out_len);
+    if (e->out) ghostty_free(NULL, e->out, e->out_cap);
+    e->out = next;
+    e->out_cap = cap;
+  }
+  MEMCPY(e->out + e->out_len, p, n);
+  e->out_len += (uint32_t)n;
+}
+
+static void on_pty(GhosttyTerminal t, void* user, const uint8_t* p, size_t n) {
+  (void)t;
+  out_put(user, p, n);
 }
 
 static void on_hold(GhosttyTerminal t, void* user, bool held) {
@@ -133,6 +162,10 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_terminal_resize(e->t, cols, rows, cw, ch);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_USERDATA, e);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_RENDER_HOLD, (const void*)on_hold);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void*)on_pty);
+  if (ghostty_key_encoder_new(NULL, &e->kenc) || ghostty_key_event_new(NULL, &e->kev) ||
+      ghostty_mouse_encoder_new(NULL, &e->menc) || ghostty_mouse_event_new(NULL, &e->mev))
+    return NULL;
   size_t lines = scrollback;
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, NULL);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines);
@@ -419,6 +452,134 @@ EXPORT(eng_warm_ascii) uint32_t eng_warm_ascii(Eng* e) {
   return e->miss_n;
 }
 
+/* ---- input: everything here appends to the out buffer ---------------- */
+EXPORT(eng_out) uint8_t* eng_out(Eng* e) { return e->out; }
+EXPORT(eng_out_len) uint32_t eng_out_len(Eng* e) { return e->out_len; }
+EXPORT(eng_out_clear) void eng_out_clear(Eng* e) { e->out_len = 0; }
+
+EXPORT(eng_mode) uint32_t eng_mode(Eng* e, uint32_t mode, uint32_t ansi) {
+  GhosttyTerminalModeConfig c = {.mode = ghostty_mode_new((uint16_t)mode, ansi != 0), .value = false};
+  ghostty_terminal_get(e->t, GHOSTTY_TERMINAL_DATA_MODE, &c);
+  return c.value;
+}
+
+static void scroll_bottom(Eng* e) {
+  GhosttyTerminalScrollViewport v = {.tag = GHOSTTY_SCROLL_VIEWPORT_BOTTOM};
+  ghostty_terminal_scroll_viewport(e->t, v);
+}
+
+/* A key event from the page. key is a GhosttyKey (from the DOM code), text
+ * the UTF-8 the key produced (in the input staging buffer), unshifted the
+ * codepoint of the key without shift. Returns the bytes appended. The
+ * encoder reads the terminal's modes itself: cursor keys, keypad, kitty
+ * keyboard flags, modifyOtherKeys. */
+EXPORT(eng_key)
+uint32_t eng_key(Eng* e, uint32_t key, uint32_t mods, uint32_t action, uint32_t text_len,
+                 uint32_t unshifted, uint32_t composing) {
+  ghostty_key_encoder_setopt_from_terminal(e->kenc, e->t);
+  ghostty_key_event_set_key(e->kev, key);
+  ghostty_key_event_set_mods(e->kev, (GhosttyMods)mods);
+  ghostty_key_event_set_action(e->kev, action);
+  ghostty_key_event_set_utf8(e->kev, (const char*)e->in, text_len);
+  ghostty_key_event_set_unshifted_codepoint(e->kev, unshifted);
+  ghostty_key_event_set_composing(e->kev, composing != 0);
+  /* The browser already applied shift to the text it reports. */
+  ghostty_key_event_set_consumed_mods(e->kev, text_len ? (mods & GHOSTTY_MODS_SHIFT) : 0);
+  char buf[128];
+  size_t n = 0;
+  if (ghostty_key_encoder_encode(e->kenc, e->kev, buf, sizeof(buf), &n) || !n) return 0;
+  out_put(e, (const uint8_t*)buf, n);
+  if (action != GHOSTTY_KEY_ACTION_RELEASE) scroll_bottom(e);
+  return (uint32_t)n;
+}
+
+/* Text with no key behind it: an IME commit or a soft keyboard insert. */
+EXPORT(eng_text) uint32_t eng_text(Eng* e, uint32_t len) {
+  out_put(e, e->in, len);
+  scroll_bottom(e);
+  return len;
+}
+
+/* Paste the text in the input buffer, bracketed if the program asked for
+ * it (mode 2004). Control bytes are made safe by Ghostty's encoder. */
+EXPORT(eng_paste) uint32_t eng_paste(Eng* e, uint32_t len) {
+  bool bracketed = eng_mode(e, 2004, 0);
+  size_t need = 0;
+  ghostty_paste_encode((char*)e->in, len, bracketed, NULL, 0, &need);
+  uint32_t before = e->out_len;
+  out_put(e, e->in, need); /* reserve, then encode in place */
+  if (e->out_len != before + need) return 0;
+  size_t wrote = 0;
+  if (ghostty_paste_encode((char*)e->in, len, bracketed, (char*)e->out + before, need, &wrote)) {
+    e->out_len = before;
+    return 0;
+  }
+  e->out_len = before + (uint32_t)wrote;
+  scroll_bottom(e);
+  return (uint32_t)wrote;
+}
+
+EXPORT(eng_focus) uint32_t eng_focus(Eng* e, uint32_t focused) {
+  if (!eng_mode(e, 1004, 0)) return 0;
+  char buf[8];
+  size_t n = 0;
+  if (ghostty_focus_encode(focused ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST, buf, sizeof(buf), &n)) return 0;
+  out_put(e, (const uint8_t*)buf, n);
+  return (uint32_t)n;
+}
+
+/* A pointer event in canvas pixels. Returns the bytes appended; 0 when the
+ * program has not asked for mouse reports. */
+EXPORT(eng_mouse)
+uint32_t eng_mouse(Eng* e, uint32_t action, uint32_t button, uint32_t mods, float x, float y,
+                   uint32_t any_pressed) {
+  ghostty_mouse_encoder_setopt_from_terminal(e->menc, e->t);
+  GhosttyMouseEncoderSize size = {.size = sizeof(size), .screen_width = e->cols * e->cw,
+                                  .screen_height = e->rows * e->ch, .cell_width = e->cw,
+                                  .cell_height = e->ch};
+  bool any = any_pressed != 0;
+  ghostty_mouse_encoder_setopt(e->menc, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+  ghostty_mouse_encoder_setopt(e->menc, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &any);
+  ghostty_mouse_event_set_action(e->mev, action);
+  ghostty_mouse_event_set_mods(e->mev, (GhosttyMods)mods);
+  if (button) ghostty_mouse_event_set_button(e->mev, button);
+  else ghostty_mouse_event_clear_button(e->mev);
+  GhosttyMousePosition pos = {x, y};
+  ghostty_mouse_event_set_position(e->mev, pos);
+  char buf[64];
+  size_t n = 0;
+  if (ghostty_mouse_encoder_encode(e->menc, e->mev, buf, sizeof(buf), &n) || !n) return 0;
+  out_put(e, (const uint8_t*)buf, n);
+  return (uint32_t)n;
+}
+
+/* Whether any mouse tracking mode is on (9, 1000, 1002, 1003). */
+EXPORT(eng_mouse_tracking) uint32_t eng_mouse_tracking(Eng* e) {
+  return eng_mode(e, 1000, 0) || eng_mode(e, 1002, 0) || eng_mode(e, 1003, 0) || eng_mode(e, 9, 0);
+}
+
+/* Resize the grid. The instance buffer is reallocated; the next frame is
+ * a full rebuild. Returns 0 on success. */
+EXPORT(eng_resize) uint32_t eng_resize(Eng* e, uint16_t cols, uint16_t rows) {
+  if (!cols || !rows) return 1;
+  if (cols == e->cols && rows == e->rows) return 0;
+  uint32_t* inst = xalloc((size_t)cols * rows * 12);
+  uint8_t* dirty = xalloc(rows);
+  if (!inst || !dirty) return 1;
+  if (ghostty_terminal_resize(e->t, cols, rows, e->cw, e->ch)) {
+    ghostty_free(NULL, (uint8_t*)inst, (size_t)cols * rows * 12);
+    ghostty_free(NULL, dirty, rows);
+    return 1;
+  }
+  ghostty_free(NULL, (uint8_t*)e->inst, (size_t)e->cols * e->rows * 12);
+  ghostty_free(NULL, e->row_dirty, e->rows);
+  e->inst = inst;
+  e->row_dirty = dirty;
+  e->cols = cols;
+  e->rows = rows;
+  return 0;
+}
+
 /* Full reset (RIS) plus a fresh render state, for the warm-up. */
 EXPORT(eng_reset) void eng_reset(Eng* e) {
   ghostty_terminal_reset(e->t);
@@ -428,6 +589,11 @@ EXPORT(eng_reset) void eng_reset(Eng* e) {
 
 EXPORT(eng_free) void eng_free(Eng* e) {
   if (!e) return;
+  ghostty_key_event_free(e->kev);
+  ghostty_key_encoder_free(e->kenc);
+  ghostty_mouse_event_free(e->mev);
+  ghostty_mouse_encoder_free(e->menc);
+  if (e->out) ghostty_free(NULL, e->out, e->out_cap);
   ghostty_render_state_row_cells_free(e->cells);
   ghostty_render_state_row_iterator_free(e->it);
   ghostty_render_state_free(e->rs);

@@ -9,6 +9,7 @@ GHOSTTY_SRC=${GHOSTTY_SRC:-$CACHE/src}
 GHOSTTY_WASM=${GHOSTTY_WASM:-$CACHE/wasm}
 out=${OUT:-$here/dist}
 mkdir -p "$out"
+node "$here/scripts/gen-keys.mjs" "$GHOSTTY_SRC/include/ghostty/vt/key/event.h" "$here/src/keys.js"
 "$ZIG" cc -target wasm32-freestanding -O3 -mbulk-memory -msimd128 -nostdlib \
   -I"$GHOSTTY_SRC/include" \
   -Wl,--no-entry -Wl,--export-memory -Wl,-z,stack-size=262144 \
