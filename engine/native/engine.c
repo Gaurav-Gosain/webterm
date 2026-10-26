@@ -12,6 +12,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "diacritics.h"
+#ifdef ENGINE_PNG
+/* Declarations only: libghostty-vt already links the Wuffs PNG decoder. */
+#include "wuffs-v0.4.c"
+#endif
 
 #ifdef __wasm__
 #define EXPORT(name) __attribute__((export_name(#name)))
@@ -40,10 +45,13 @@
 #define C_STYLE(r) ((uint32_t)(((r) >> 26) & 0xFFFFu))
 #define C_WIDE(r) ((uint32_t)(((r) >> 42) & 3u))
 
+#define PLACEHOLDER_CP 0x10EEEEu /* kitty graphics unicode placeholder */
 #define GT_CAP 32768u /* glyph table, power of two */
 #define ARENA_CAP (1u << 20)
 #define MISS_CAP 4096u
 #define IN_CAP (1u << 20)
+
+#include "sixel.c"
 
 typedef struct {
   uint64_t key;
@@ -103,6 +111,20 @@ typedef struct Eng {
   GhosttySelectionGestureEvent gpress, gdrag, grelease, gtick;
   uint8_t* sel_text;
   size_t sel_len;
+  /* sixel: a pre-scan finds DCS q sequences before Ghostty sees them */
+  uint8_t sx_state;
+  uint8_t sx_hdr[40];
+  uint32_t sx_hdr_len;
+  Sixel* sx;
+  uint32_t next_sixel_id;
+  uint32_t bg_rgb;
+  /* graphics: placements and placeholder cells for the frame */
+  GhosttyKittyGraphicsPlacementIterator pit;
+  float* gfx;       /* per entry: id, layer, dst x y w h, src x y w h (floats) */
+  uint32_t gfx_n, gfx_cap;
+  uint32_t* ph;     /* placeholder cells: x, y, image id, placement id, row, col */
+  uint32_t ph_n, ph_cap;
+  uint64_t gfx_gen;
 } Eng;
 
 static void* xalloc(size_t n) {
@@ -110,6 +132,9 @@ static void* xalloc(size_t n) {
   if (p) MEMSET(p, 0, n);
   return p;
 }
+
+static void* sx_alloc(size_t n) { return ghostty_alloc(NULL, n); }
+static void sx_free(void* p, size_t n) { ghostty_free(NULL, p, n); }
 
 static uint32_t rgb(GhosttyColorRgb c) {
   return (uint32_t)c.r | ((uint32_t)c.g << 8) | ((uint32_t)c.b << 16);
@@ -196,10 +221,9 @@ static bool on_size(GhosttyTerminal t, void* user, GhosttySizeReportSize* out) {
 
 static bool on_attributes(GhosttyTerminal t, void* user, GhosttyDeviceAttributes* a) {
   (void)t; (void)user;
-  /* VT220 class, with ANSI colour (22). Sixel (4) is added when the engine
-   * draws sixel. */
+  /* VT220 class, with sixel (4) and ANSI colour (22). */
   *a = (GhosttyDeviceAttributes){
-      .primary = {.conformance_level = 62, .features = {22}, .num_features = 1},
+      .primary = {.conformance_level = 62, .features = {4, 22}, .num_features = 2},
       .secondary = {.device_type = 1, .firmware_version = 10, .rom_cartridge = 0},
       .tertiary = {.unit_id = 0},
   };
@@ -241,6 +265,222 @@ static void on_hold(GhosttyTerminal t, void* user, bool held) {
   e->held = held;
 }
 
+/* ---- PNG for kitty graphics (f=100) -------------------------------- */
+#ifdef ENGINE_PNG
+#define PNG_MAX_SIDE 16384u
+static bool decode_png(void* user, const GhosttyAllocator* a, const uint8_t* data, size_t len,
+                       GhosttySysImage* out) {
+  (void)user;
+  size_t dlen = sizeof__wuffs_png__decoder(), work_len = 0, bytes = 0;
+  wuffs_png__decoder* dec = (wuffs_png__decoder*)ghostty_alloc(NULL, dlen);
+  uint8_t *work = NULL, *pixels = NULL;
+  bool ok = false;
+  if (!dec) return false;
+  wuffs_base__io_buffer src = wuffs_base__ptr_u8__reader((uint8_t*)data, len, true);
+  wuffs_base__image_config cfg;
+  wuffs_base__pixel_buffer pb;
+  if (wuffs_png__decoder__initialize(dec, dlen, WUFFS_VERSION, 0).repr ||
+      wuffs_png__decoder__decode_image_config(dec, &cfg, &src).repr)
+    goto done;
+  uint32_t w = wuffs_base__pixel_config__width(&cfg.pixcfg), h = wuffs_base__pixel_config__height(&cfg.pixcfg);
+  uint64_t wmax = wuffs_png__decoder__workbuf_len(dec).max_incl;
+  if (!w || !h || w > PNG_MAX_SIDE || h > PNG_MAX_SIDE || wmax > (64u << 20)) goto done;
+  wuffs_base__pixel_config__set(&cfg.pixcfg, WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
+                                WUFFS_BASE__PIXEL_SUBSAMPLING__NONE, w, h);
+  bytes = (size_t)w * h * 4;
+  work_len = (size_t)wmax;
+  if (work_len && !(work = ghostty_alloc(NULL, work_len))) goto done;
+  if (!(pixels = ghostty_alloc(a, bytes))) goto done;
+  if (wuffs_base__pixel_buffer__set_from_slice(&pb, &cfg.pixcfg, wuffs_base__make_slice_u8(pixels, bytes)).repr ||
+      wuffs_png__decoder__decode_frame(dec, &pb, &src, WUFFS_BASE__PIXEL_BLEND__SRC,
+                                       wuffs_base__make_slice_u8(work, work_len), NULL).repr)
+    goto done;
+  *out = (GhosttySysImage){.width = w, .height = h, .data = pixels, .data_len = bytes};
+  ok = true;
+done:
+  if (!ok && pixels) ghostty_free(a, pixels, bytes);
+  if (work) ghostty_free(NULL, work, work_len);
+  ghostty_free(NULL, (uint8_t*)dec, dlen);
+  return ok;
+}
+#endif
+
+/* ---- sixel ----------------------------------------------------------- */
+/* libghostty-vt has no sixel. A pre-scan finds "ESC P <digits;> q" before
+ * Ghostty sees it, decodes the image here, and hands it to Ghostty as a
+ * kitty graphics image placed at the cursor, so it scrolls, clears and
+ * prunes with the text. */
+enum { SX_GROUND, SX_ESC, SX_HDR, SX_DATA, SX_DATA_ESC };
+
+typedef uint8_t v16u8 __attribute__((vector_size(16)));
+
+/* First index of "ESC P" in p[0..n), or n. An ESC as the last byte is
+ * reported at n-1 so the caller can hold it until the next write. */
+static size_t find_dcs(const uint8_t* p, size_t n) {
+  size_t i = 0;
+#ifdef __wasm_simd128__
+  const v16u8 esc = {27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27};
+  const v16u8 pp = {'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'};
+  for (; i + 17 <= n; i += 16) {
+    v16u8 a, b;
+    MEMCPY(&a, p + i, 16);
+    MEMCPY(&b, p + i + 1, 16);
+    v16u8 m = (v16u8)((a == esc) & (b == pp));
+    if (__builtin_reduce_or(m)) break;
+  }
+#endif
+  for (; i < n; i++) {
+    if (p[i] != 27) continue;
+    if (i + 1 == n || p[i + 1] == 'P') return i;
+  }
+  return n;
+}
+
+static void put_num(uint8_t* buf, size_t* o, uint32_t v) {
+  char t[12]; int k = 12;
+  do { t[--k] = '0' + v % 10; v /= 10; } while (v);
+  while (k < 12) buf[(*o)++] = t[k++];
+}
+
+static void sixel_emit(Eng* e) {
+  Sixel* s = e->sx;
+  int32_t w = 0, h = 0;
+  sixel_size(s, &w, &h);
+  if (s->failed || w <= 0 || h <= 0) return;
+  size_t raw = (size_t)w * h * 4;
+  uint8_t* rgba = ghostty_alloc(NULL, raw);
+  if (!rgba) return;
+  uint32_t bg = 0xFF000000u | e->bg_rgb;
+  for (int32_t y = 0; y < h; y++)
+    for (int32_t x = 0; x < w; x++) {
+      size_t k = (size_t)y * s->cap_w + x;
+      uint32_t v = s->set[k] ? s->px[k] : (s->transparent ? 0 : bg);
+      MEMCPY(rgba + ((size_t)y * w + x) * 4, &v, 4);
+    }
+  static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  uint8_t buf[4200];
+  uint32_t id = e->next_sixel_id++;
+  const size_t CHUNK = 3072; /* raw bytes per APC chunk: 4096 base64 */
+  for (size_t off = 0; off < raw; off += CHUNK) {
+    size_t n = raw - off < CHUNK ? raw - off : CHUNK, o = 0;
+    bool last = off + n >= raw;
+    buf[o++] = 27; buf[o++] = '_'; buf[o++] = 'G';
+    if (off == 0) {
+      /* z=-1: under the text, as xterm draws text written over a sixel. */
+      static const char a[] = "a=T,f=32,q=2,C=1,z=-1,s=";
+      MEMCPY(buf + o, a, sizeof(a) - 1); o += sizeof(a) - 1;
+      put_num(buf, &o, (uint32_t)w);
+      buf[o++] = ','; buf[o++] = 'v'; buf[o++] = '='; put_num(buf, &o, (uint32_t)h);
+      buf[o++] = ','; buf[o++] = 'i'; buf[o++] = '='; put_num(buf, &o, id);
+      buf[o++] = ',';
+    }
+    buf[o++] = 'm'; buf[o++] = '='; buf[o++] = last ? '0' : '1'; buf[o++] = ';';
+    const uint8_t* q = rgba + off;
+    size_t k = 0;
+    for (; k + 3 <= n; k += 3) {
+      uint32_t v = (uint32_t)q[k] << 16 | (uint32_t)q[k + 1] << 8 | q[k + 2];
+      buf[o++] = B64[v >> 18]; buf[o++] = B64[(v >> 12) & 63]; buf[o++] = B64[(v >> 6) & 63]; buf[o++] = B64[v & 63];
+    }
+    if (k < n) {
+      uint32_t v = (uint32_t)q[k] << 16 | (k + 1 < n ? (uint32_t)q[k + 1] << 8 : 0);
+      buf[o++] = B64[v >> 18]; buf[o++] = B64[(v >> 12) & 63];
+      buf[o++] = k + 1 < n ? B64[(v >> 6) & 63] : '='; buf[o++] = '=';
+    }
+    buf[o++] = 27; buf[o++] = '\\';
+    ghostty_terminal_vt_write(e->t, buf, o);
+  }
+  ghostty_free(NULL, rgba, raw);
+  /* Cursor as xterm leaves it after a sixel (VT340 mode): on the last text
+   * row the image covers, in the column it started in. A line feed scrolls
+   * when needed and keeps the column. */
+  uint32_t rows = ((uint32_t)h + e->ch - 1) / e->ch;
+  uint8_t nl = '\n';
+  for (uint32_t r = 1; r < rows; r++) ghostty_terminal_vt_write(e->t, &nl, 1);
+}
+
+static void sixel_end(Eng* e, bool emit) {
+  if (!e->sx) return;
+  if (emit) sixel_emit(e);
+  sixel_free(e->sx);
+  ghostty_free(NULL, (uint8_t*)e->sx, sizeof(Sixel));
+  e->sx = NULL;
+}
+
+static void sixel_begin(Eng* e) {
+  int32_t prm[3] = {0, 0, 0}, np = 0;
+  for (uint32_t i = 2; i < e->sx_hdr_len; i++) {
+    uint8_t c = e->sx_hdr[i];
+    if (c == ';') { if (np < 2) np++; }
+    else if (c >= '0' && c <= '9') prm[np] = prm[np] * 10 + (c - '0');
+  }
+  e->sx = (Sixel*)ghostty_alloc(NULL, sizeof(Sixel));
+  if (e->sx) sixel_init(e->sx, prm[1]);
+}
+
+/* Everything written to the terminal goes through here. */
+static void vt_feed(Eng* e, const uint8_t* p, size_t n) {
+#ifdef ENGINE_NO_SIXEL
+  ghostty_terminal_vt_write(e->t, p, n);
+  return;
+#endif
+  size_t i = 0;
+  while (i < n) {
+    switch (e->sx_state) {
+      case SX_GROUND: {
+        size_t k = i + find_dcs(p + i, n - i);
+        if (k > i) ghostty_terminal_vt_write(e->t, p + i, k - i);
+        if (k >= n) return;
+        /* An ESC that may start a sixel: hold it. */
+        e->sx_hdr[0] = 27;
+        e->sx_hdr_len = 1;
+        e->sx_state = SX_ESC;
+        i = k + 1;
+        break;
+      }
+      case SX_ESC:
+        if (p[i] == 'P') {
+          e->sx_hdr[e->sx_hdr_len++] = 'P';
+          e->sx_state = SX_HDR;
+          i++;
+        } else {
+          ghostty_terminal_vt_write(e->t, e->sx_hdr, e->sx_hdr_len);
+          e->sx_state = SX_GROUND;
+        }
+        break;
+      case SX_HDR: {
+        uint8_t c = p[i];
+        if (((c >= '0' && c <= '9') || c == ';') && e->sx_hdr_len < sizeof(e->sx_hdr)) {
+          e->sx_hdr[e->sx_hdr_len++] = c;
+          i++;
+        } else if (c == 'q') {
+          sixel_begin(e);
+          e->sx_state = SX_DATA;
+          i++;
+        } else {
+          /* Another DCS (DECRQSS, tmux, XTGETTCAP): Ghostty's. */
+          ghostty_terminal_vt_write(e->t, e->sx_hdr, e->sx_hdr_len);
+          e->sx_state = SX_GROUND;
+        }
+        break;
+      }
+      case SX_DATA: {
+        size_t k = i;
+        while (k < n && p[k] != 27 && p[k] != 0x18 && p[k] != 0x1A) k++;
+        if (e->sx && k > i) sixel_feed(e->sx, p + i, k - i);
+        if (k >= n) return;
+        if (p[k] == 27) { e->sx_state = SX_DATA_ESC; i = k + 1; }
+        else { sixel_end(e, false); e->sx_state = SX_GROUND; i = k + 1; } /* CAN or SUB */
+        break;
+      }
+      case SX_DATA_ESC:
+        sixel_end(e, true);
+        if (p[i] == '\\') { e->sx_state = SX_GROUND; i++; }
+        else { e->sx_hdr[0] = 27; e->sx_hdr_len = 1; e->sx_state = SX_ESC; }
+        break;
+    }
+  }
+}
+
 EXPORT(eng_input_cap) uint32_t eng_input_cap(void) { return IN_CAP; }
 
 EXPORT(eng_new)
@@ -267,6 +507,19 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES, (const void*)on_attributes);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void*)on_xtversion);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, (const void*)on_scheme);
+  /* Kitty graphics: the browser has no filesystem or shared memory, so only
+   * direct transmission is allowed. PNG payloads decode through Wuffs. */
+  bool off = false;
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE, &off);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE, &off);
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM, &off);
+  uint64_t img_limit = 256ull << 20;
+  ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &img_limit);
+#ifdef ENGINE_PNG
+  ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG, (const void*)decode_png);
+#endif
+  e->next_sixel_id = 0x7F000001u;
+  if (ghostty_kitty_graphics_placement_iterator_new(NULL, &e->pit)) return NULL;
   if (ghostty_selection_gesture_new(NULL, &e->gesture) ||
       ghostty_selection_gesture_event_new(NULL, &e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS) ||
       ghostty_selection_gesture_event_new(NULL, &e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG) ||
@@ -306,15 +559,16 @@ EXPORT(eng_theme) void eng_theme(Eng* e, uint32_t fg, uint32_t bg, uint32_t cur)
   GhosttyColorRgb c = {cur & 255, (cur >> 8) & 255, (cur >> 16) & 255};
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &f);
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &b);
+  e->bg_rgb = bg & 0xFFFFFF;
   ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &c);
 }
 
 EXPORT(eng_input) uint8_t* eng_input(Eng* e) { return e->in; }
 EXPORT(eng_write_input) void eng_write_input(Eng* e, uint32_t n) {
-  ghostty_terminal_vt_write(e->t, e->in, n);
+  vt_feed(e, e->in, n);
   e->stats[0] += n;
 }
-void eng_write(Eng* e, const uint8_t* p, size_t n) { ghostty_terminal_vt_write(e->t, p, n); }
+void eng_write(Eng* e, const uint8_t* p, size_t n) { vt_feed(e, p, n); }
 
 EXPORT(eng_scroll) void eng_scroll(Eng* e, int32_t delta) {
   GhosttyTerminalScrollViewport v = {.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA,
@@ -458,14 +712,14 @@ static bool build_row(Eng* e, uint16_t y, const GhosttyRenderStateColors* colors
       /* nothing to draw */
     } else if (tag == GHOSTTY_CELL_CONTENT_CODEPOINT) {
       uint32_t cp = C_CP(c);
-      if (cp > 32) {
+      if (cp > 32 && cp != PLACEHOLDER_CP) {
         uint8_t buf[4];
         size_t len = utf8(cp, buf);
         uint32_t width = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1;
         slot = glyph(e, (uint64_t)cp | ((uint64_t)sstyle << 21) | ((uint64_t)width << 24), buf, len,
                      width, sstyle, &full);
       }
-    } else if (tag == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME) {
+    } else if (tag == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME && C_CP(c) != PLACEHOLDER_CP) {
       uint8_t buf[256];
       GhosttyBuffer text = {.ptr = buf, .cap = sizeof(buf), .len = 0};
       ghostty_render_state_row_cells_select(e->cells, (uint16_t)x);
@@ -809,6 +1063,200 @@ EXPORT(eng_scrollbar) uint32_t* eng_scrollbar(Eng* e) {
   return out;
 }
 
+/* ---- graphics for the frame ---------------------------------------- */
+/* eng_gfx lists what to draw for images: kitty placements (sixel arrives
+ * as one) and kitty unicode placeholder cells. Each entry is 10 words:
+ * image id, layer (1 below backgrounds, 2 below text, 3 above text), then
+ * destination x, y, w, h in canvas pixels and source x, y, w, h in image
+ * pixels, all as float32. Call after eng_frame. */
+#define GFX_WORDS 10
+#define PLACEHOLDER 0x10EEEEu
+
+static void gfx_put(Eng* e, uint32_t id, uint32_t layer, float dx, float dy, float dw, float dh,
+                    float sx, float sy, float sw, float sh) {
+  if (e->gfx_n == e->gfx_cap) {
+    uint32_t cap = e->gfx_cap ? e->gfx_cap * 2 : 64;
+    float* next = (float*)ghostty_alloc(NULL, (size_t)cap * GFX_WORDS * 4);
+    if (!next) return;
+    if (e->gfx_n) MEMCPY(next, e->gfx, (size_t)e->gfx_n * GFX_WORDS * 4);
+    if (e->gfx) ghostty_free(NULL, (uint8_t*)e->gfx, (size_t)e->gfx_cap * GFX_WORDS * 4);
+    e->gfx = next;
+    e->gfx_cap = cap;
+  }
+  float* o = e->gfx + (size_t)e->gfx_n++ * GFX_WORDS;
+  MEMCPY(&o[0], &id, 4);
+  MEMCPY(&o[1], &layer, 4);
+  o[2] = dx; o[3] = dy; o[4] = dw; o[5] = dh; o[6] = sx; o[7] = sy; o[8] = sw; o[9] = sh;
+}
+
+static int32_t diacritic_index(uint32_t cp) {
+  int32_t lo = 0, hi = DIACRITICS_LEN - 1;
+  while (lo <= hi) {
+    int32_t mid = (lo + hi) / 2;
+    if (DIACRITICS[mid] == cp) return mid;
+    if (DIACRITICS[mid] < cp) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+
+static uint32_t color_id(GhosttyStyleColor c) {
+  if (c.tag == GHOSTTY_STYLE_COLOR_PALETTE) return c.value.palette;
+  if (c.tag == GHOSTTY_STYLE_COLOR_RGB) return ((uint32_t)c.value.rgb.r << 16) | ((uint32_t)c.value.rgb.g << 8) | c.value.rgb.b;
+  return 0;
+}
+
+/* The grid a virtual placement covers, for placeholder cells. */
+static bool virtual_grid(Eng* e, GhosttyKittyGraphics g, uint32_t image, uint32_t placement,
+                         uint32_t* cols, uint32_t* rows) {
+  if (ghostty_kitty_graphics_get(g, GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR, &e->pit)) return false;
+  while (ghostty_kitty_graphics_placement_next(e->pit)) {
+    uint32_t iid = 0, pid = 0, c = 0, r = 0;
+    bool virt = false;
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &iid);
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL, &virt);
+    if (!virt || iid != image) continue;
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID, &pid);
+    if (placement && pid != placement) continue;
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS, &c);
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS, &r);
+    *cols = c;
+    *rows = r;
+    return true;
+  }
+  return false;
+}
+
+static void placeholder_cell(Eng* e, GhosttyKittyGraphics g, uint32_t x, uint32_t y, uint32_t image,
+                             uint32_t placement, uint32_t row, uint32_t col) {
+  GhosttyKittyGraphicsImage img = ghostty_kitty_graphics_image(g, image);
+  if (!img) return;
+  uint32_t iw = 0, ih = 0, cols = 0, rows = 0;
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &iw);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &ih);
+  if (!iw || !ih || !virtual_grid(e, g, image, placement, &cols, &rows)) return;
+  /* Missing grid sizes follow the image's own size in cells. */
+  if (!cols) cols = (iw + e->cw - 1) / e->cw;
+  if (!rows) rows = (ih + e->ch - 1) / e->ch;
+  /* The image is fitted into the cols x rows box, aspect kept, centred. */
+  float bw = (float)(cols * e->cw), bh = (float)(rows * e->ch);
+  float sc = bw / iw < bh / ih ? bw / iw : bh / ih;
+  float ox = (bw - iw * sc) / 2, oy = (bh - ih * sc) / 2;
+  float cx0 = (float)(col * e->cw), cy0 = (float)(row * e->ch);
+  float x0 = cx0 > ox ? cx0 : ox, y0 = cy0 > oy ? cy0 : oy;
+  float x1 = cx0 + e->cw < ox + iw * sc ? cx0 + e->cw : ox + iw * sc;
+  float y1 = cy0 + e->ch < oy + ih * sc ? cy0 + e->ch : oy + ih * sc;
+  if (x1 <= x0 || y1 <= y0) return;
+  gfx_put(e, image, 3, (float)(x * e->cw) + (x0 - cx0), (float)(y * e->ch) + (y0 - cy0), x1 - x0, y1 - y0,
+          (x0 - ox) / sc, (y0 - oy) / sc, (x1 - x0) / sc, (y1 - y0) / sc);
+}
+
+EXPORT(eng_gfx) uint32_t eng_gfx(Eng* e) {
+  e->gfx_n = 0;
+  GhosttyKittyGraphics g = NULL;
+  if (ghostty_terminal_get(e->t, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, &g) || !g) return 0;
+  uint64_t gen = 0;
+  ghostty_kitty_graphics_get(g, GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION, &gen);
+  if (!gen) return 0;
+  bool any_virtual = false;
+  /* Placements on the grid. */
+  if (ghostty_kitty_graphics_get(g, GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR, &e->pit)) return 0;
+  while (ghostty_kitty_graphics_placement_next(e->pit)) {
+    uint32_t iid = 0, xo = 0, yo = 0;
+    int32_t z = 0;
+    bool virt = false;
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &iid);
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL, &virt);
+    if (virt) { any_virtual = true; continue; }
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET, &xo);
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Y_OFFSET, &yo);
+    ghostty_kitty_graphics_placement_get(e->pit, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z, &z);
+    GhosttyKittyGraphicsImage img = ghostty_kitty_graphics_image(g, iid);
+    if (!img) continue;
+    GhosttyKittyGraphicsPlacementRenderInfo ri = GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo);
+    if (ghostty_kitty_graphics_placement_render_info(e->pit, img, e->t, &ri) || !ri.viewport_visible ||
+        !ri.pixel_width || !ri.pixel_height || !ri.source_width || !ri.source_height)
+      continue;
+    uint32_t layer = z < INT32_MIN / 2 ? 1 : z < 0 ? 2 : 3;
+    gfx_put(e, iid, layer, (float)(ri.viewport_col * (int32_t)e->cw + (int32_t)xo),
+            (float)(ri.viewport_row * (int32_t)e->ch + (int32_t)yo), (float)ri.pixel_width,
+            (float)ri.pixel_height, (float)ri.source_x, (float)ri.source_y, (float)ri.source_width,
+            (float)ri.source_height);
+  }
+  if (!any_virtual) return e->gfx_n;
+  /* Unicode placeholder cells: U+10EEEE with the image id in the
+   * foreground colour, the placement id in the underline colour, and row,
+   * column and the image id's high byte as diacritics. Runs continue the
+   * way kitty and Ghostty continue them. */
+  ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &e->it);
+  uint32_t y = 0;
+  while (y < e->rows && ghostty_render_state_row_iterator_next(e->it)) {
+    GhosttyCellsView raw = {0};
+    if (ghostty_render_state_row_get(e->it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS_RAW, &raw)) { y++; continue; }
+    ghostty_render_state_row_get(e->it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &e->cells);
+    bool run = false;
+    uint32_t r_img = 0, r_pid = 0, r_row = 0, r_col = 0, r_w = 0, r_high = 0;
+    for (uint32_t x = 0; x < raw.len && x < e->cols; x++) {
+      GhosttyCell c = raw.ptr[x];
+      uint32_t tag = C_TAG(c);
+      if ((tag != 0 && tag != 1) || C_CP(c) != PLACEHOLDER) { run = false; continue; }
+      ghostty_render_state_row_cells_select(e->cells, (uint16_t)x);
+      GhosttyStyle st = GHOSTTY_INIT_SIZED(GhosttyStyle);
+      ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &st);
+      uint32_t img = color_id(st.fg_color), pid = color_id(st.underline_color);
+      int32_t row = -1, col = -1, high = -1;
+      if (tag == 1) {
+        uint32_t cps[8] = {0}, len = 0;
+        ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &len);
+        if (len > 8) len = 8;
+        if (len) ghostty_render_state_row_cells_get(e->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, cps);
+        if (len > 1) row = diacritic_index(cps[1]);
+        if (len > 2) col = diacritic_index(cps[2]);
+        if (len > 3) high = diacritic_index(cps[3]);
+        if (high > 255) high = -1;
+      }
+      bool cont = run && img == r_img && pid == r_pid && (row < 0 || (uint32_t)row == r_row) &&
+                  (col < 0 || (uint32_t)col == r_col + r_w) && (high < 0 || (uint32_t)high == r_high);
+      if (cont) {
+        r_w++;
+      } else {
+        run = true;
+        r_img = img; r_pid = pid; r_w = 1;
+        r_row = row < 0 ? 0 : (uint32_t)row;
+        r_col = col < 0 ? 0 : (uint32_t)col;
+        r_high = high < 0 ? 0 : (uint32_t)high;
+      }
+      placeholder_cell(e, g, x, y, r_img | (r_high << 24), r_pid, r_row, r_col + r_w - 1);
+    }
+    y++;
+  }
+  return e->gfx_n;
+}
+EXPORT(eng_gfx_ptr) float* eng_gfx_ptr(Eng* e) { return e->gfx; }
+
+/* One image's pixels: width, height, format, byte length, data pointer,
+ * low 32 bits of its generation. Returns NULL when the image is gone. */
+EXPORT(eng_image) uint32_t* eng_image(Eng* e, uint32_t id) {
+  static uint32_t out[6];
+  GhosttyKittyGraphics g = NULL;
+  if (ghostty_terminal_get(e->t, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, &g) || !g) return NULL;
+  GhosttyKittyGraphicsImage img = ghostty_kitty_graphics_image(g, id);
+  if (!img) return NULL;
+  uint32_t w = 0, h = 0;
+  GhosttyKittyImageFormat fmt = 0;
+  size_t len = 0;
+  const uint8_t* data = NULL;
+  uint64_t gen = 0;
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &w);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &h);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_FORMAT, &fmt);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN, &len);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR, &data);
+  ghostty_kitty_graphics_image_get(img, GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &gen);
+  out[0] = w; out[1] = h; out[2] = (uint32_t)fmt; out[3] = (uint32_t)len;
+  out[4] = (uint32_t)(uintptr_t)data; out[5] = (uint32_t)gen;
+  return out;
+}
+
 /* Full reset (RIS) plus a fresh render state, for the warm-up. */
 EXPORT(eng_reset) void eng_reset(Eng* e) {
   ghostty_terminal_reset(e->t);
@@ -818,6 +1266,9 @@ EXPORT(eng_reset) void eng_reset(Eng* e) {
 
 EXPORT(eng_free) void eng_free(Eng* e) {
   if (!e) return;
+  ghostty_kitty_graphics_placement_iterator_free(e->pit);
+  if (e->gfx) ghostty_free(NULL, (uint8_t*)e->gfx, (size_t)e->gfx_cap * GFX_WORDS * 4);
+  sixel_end(e, false);
   ghostty_selection_gesture_event_free(e->gpress);
   ghostty_selection_gesture_event_free(e->gdrag);
   ghostty_selection_gesture_event_free(e->grelease);

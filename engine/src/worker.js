@@ -21,6 +21,7 @@ let x; // wasm exports
 let e = 0; // engine pointer
 let cols = 0, rows = 0, cw = 0, ch = 0, baseline = 0, dpr = 1;
 let gl, prog, vao, instBuf, atlasTex, flagTex, uni = {};
+let iprog, ivao, ibuf, iuni = {};
 let stageCtx, spr = 0, slotRows = 0;
 let fontFamily = 'monospace', fontPx = 14;
 let lastDraw = 0;
@@ -78,38 +79,69 @@ uniform int u_spr;
 uniform vec3 u_curColor;
 uniform float u_ulY;
 uniform float u_ulH;
+uniform int u_mode; // 0 whole cell, 1 background only, 2 foreground only (blended)
 flat in uint v_glyph;
 flat in vec3 v_fg;
 flat in vec3 v_bg;
 flat in int v_cursor;
 in vec2 v_local;
 out vec4 o;
+void over(inout vec4 f, vec3 c, float a) { f = vec4(mix(f.rgb, c, a), f.a + a * (1.0 - f.a)); }
 void main() {
   vec3 fg = v_fg, bg = v_bg;
   // cursor styles from GhosttyRenderStateCursorVisualStyle: 0 bar, 1 block, 2 underline, 3 hollow
-  if (v_cursor == 2) { vec3 t = fg; fg = bg; bg = u_curColor; }
-  vec3 c = bg;
+  if (v_cursor == 2) { fg = bg; bg = u_curColor; }
+  if (u_mode == 1) { o = vec4(bg, 1.0); return; }
+  vec4 f = vec4(0.0);
   uint slot = v_glyph & 0xFFFFFu;
   if (slot != 0u) {
     ivec2 sp = ivec2(int(slot) % u_spr, int(slot) / u_spr);
-    ivec2 tp = sp * ivec2(u_cell) + ivec2(v_local);
-    vec4 t = texelFetch(u_atlas, tp, 0);
-    uint color = texelFetch(u_flags, sp, 0).r;
+    vec4 t = texelFetch(u_atlas, sp * ivec2(u_cell) + ivec2(v_local), 0);
     float a = t.a;
     if ((v_glyph & (1u << 27)) != 0u) a *= 0.5;
-    c = color != 0u ? mix(bg, t.rgb, a) : mix(bg, fg, a);
+    f = vec4(texelFetch(u_flags, sp, 0).r != 0u ? t.rgb : fg, a);
   }
   float y = v_local.y, xx = v_local.x;
   uint ul = (v_glyph >> 22) & 7u;
-  if (ul != 0u && y >= u_ulY && y < u_ulY + u_ulH) c = fg;
-  if (ul == 2u && y >= u_ulY + 2.0 * u_ulH && y < u_ulY + 3.0 * u_ulH) c = fg;
-  if ((v_glyph & (1u << 25)) != 0u && abs(y - u_cell.y * 0.5) < u_ulH * 0.5 + 0.01) c = fg;
-  if ((v_glyph & (1u << 26)) != 0u && y < u_ulH) c = fg;
-  if (v_cursor == 1 && xx < 2.0) c = u_curColor;
-  if (v_cursor == 3 && y >= u_cell.y - 2.0) c = u_curColor;
-  if (v_cursor == 4 && (xx < 1.0 || y < 1.0 || y >= u_cell.y - 1.0 || xx >= u_cell.x - 1.0)) c = u_curColor;
-  o = vec4(c, 1.0);
+  // SGR 4:1 single, 4:2 double, 4:3 curly, 4:4 dotted, 4:5 dashed
+  bool line = y >= u_ulY && y < u_ulY + u_ulH;
+  if (ul == 1u && line) over(f, fg, 1.0);
+  if (ul == 2u && (line || (y >= u_ulY + 2.0 * u_ulH && y < u_ulY + 3.0 * u_ulH))) over(f, fg, 1.0);
+  if (ul == 3u) {
+    float wave = u_ulY + u_ulH + u_ulH * sin(xx / u_cell.x * 6.2831853);
+    float d = abs(y + 0.5 - wave);
+    if (d < u_ulH) over(f, fg, clamp(u_ulH - d + 0.5, 0.0, 1.0));
+  }
+  if (ul == 4u && line && mod(floor(xx / max(u_ulH, 1.0) / 2.0), 2.0) < 1.0) over(f, fg, 1.0);
+  if (ul == 5u && line && mod(floor(xx / (u_cell.x * 0.5)), 2.0) < 1.0) over(f, fg, 1.0);
+  if ((v_glyph & (1u << 25)) != 0u && abs(y - u_cell.y * 0.5) < u_ulH * 0.5 + 0.01) over(f, fg, 1.0);
+  if ((v_glyph & (1u << 26)) != 0u && y < u_ulH) over(f, fg, 1.0);
+  if (v_cursor == 1 && xx < 2.0) over(f, u_curColor, 1.0);
+  if (v_cursor == 3 && y >= u_cell.y - 2.0) over(f, u_curColor, 1.0);
+  if (v_cursor == 4 && (xx < 1.0 || y < 1.0 || y >= u_cell.y - 1.0 || xx >= u_cell.x - 1.0)) over(f, u_curColor, 1.0);
+  if (u_mode == 2) { if (f.a <= 0.0) discard; o = f; return; }
+  o = vec4(mix(bg, f.rgb, f.a), 1.0);
 }`;
+
+// Images: kitty placements (sixel arrives as one) and placeholder cells.
+const IVS = `#version 300 es
+layout(location=0) in vec4 a_dst; // x, y, w, h in canvas pixels
+layout(location=1) in vec4 a_src; // u, v, w, h, normalized
+uniform vec2 u_view;
+out vec2 v_uv;
+void main() {
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  vec2 px = a_dst.xy + corner * a_dst.zw;
+  v_uv = a_src.xy + corner * a_src.zw;
+  vec2 ndc = px / u_view * 2.0 - 1.0;
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
+}`;
+const IFS = `#version 300 es
+precision highp float;
+uniform sampler2D u_img;
+in vec2 v_uv;
+out vec4 o;
+void main() { o = texture(u_img, v_uv); }`;
 
 function compile(type, src) {
   const s = gl.createShader(type);
@@ -143,7 +175,7 @@ function setupGL(canvas) {
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
   gl.useProgram(prog);
-  for (const n of ['u_cell', 'u_view', 'u_cols', 'u_cursor', 'u_curColor', 'u_atlas', 'u_flags', 'u_spr', 'u_ulY', 'u_ulH']) uni[n] = gl.getUniformLocation(prog, n);
+  for (const n of ['u_cell', 'u_view', 'u_cols', 'u_cursor', 'u_curColor', 'u_atlas', 'u_flags', 'u_spr', 'u_ulY', 'u_ulH', 'u_mode']) uni[n] = gl.getUniformLocation(prog, n);
   vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
   instBuf = gl.createBuffer();
@@ -176,6 +208,102 @@ function setupGL(canvas) {
   gl.uniform1f(uni.u_ulY, Math.min(ch - ulH, baseline + ulH));
   gl.uniform1f(uni.u_ulH, ulH);
   gl.viewport(0, 0, cols * cw, rows * ch);
+  gl.uniform1i(uni.u_mode, 0);
+  // Image program: one instanced quad per placement or placeholder cell.
+  iprog = gl.createProgram();
+  gl.attachShader(iprog, compile(gl.VERTEX_SHADER, IVS));
+  gl.attachShader(iprog, compile(gl.FRAGMENT_SHADER, IFS));
+  gl.linkProgram(iprog);
+  if (!gl.getProgramParameter(iprog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(iprog));
+  iuni = { u_view: gl.getUniformLocation(iprog, 'u_view'), u_img: gl.getUniformLocation(iprog, 'u_img') };
+  ivao = gl.createVertexArray();
+  gl.bindVertexArray(ivao);
+  ibuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+  for (let i = 0; i < 2; i++) {
+    gl.enableVertexAttribArray(i);
+    gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 32, i * 16);
+    gl.vertexAttribDivisor(i, 1);
+  }
+  gl.bindVertexArray(vao);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+}
+
+// ---- images -------------------------------------------------------------
+const images = new Map(); // id -> { tex, gen, w, h, seen }
+let frameNo = 0;
+
+function imageTexture(id) {
+  const info = x.eng_image(e, id);
+  if (!info) return null;
+  const [w, h, fmt, len, ptr, gen] = new Uint32Array(x.memory.buffer, info, 6);
+  let img = images.get(id);
+  if (img && img.gen === gen) { img.seen = frameNo; return img; }
+  if (!w || !h || !len) return null;
+  if (!img) { img = { tex: gl.createTexture() }; images.set(id, img); }
+  Object.assign(img, { gen, w, h, seen: frameNo });
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, img.tex);
+  let data = new Uint8Array(x.memory.buffer, ptr, len), glFmt = gl.RGBA;
+  // GhosttyKittyImageFormat: 0 RGB, 1 RGBA, 2 PNG (decoded to RGBA), 3 gray+alpha, 4 gray
+  if (fmt === 0) glFmt = gl.RGB;
+  else if (fmt === 3 || fmt === 4) {
+    const n = w * h, step = fmt === 3 ? 2 : 1, rgba = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) { const v = data[i * step]; rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = step === 2 ? data[i * 2 + 1] : 255; }
+    data = rgba;
+  }
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, glFmt === gl.RGB ? gl.RGB8 : gl.RGBA8, w, h, 0, glFmt, gl.UNSIGNED_BYTE, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  T.imageUploads = (T.imageUploads || 0) + 1;
+  return img;
+}
+
+// Draw the entries of one layer, grouped by image so each texture binds once.
+function drawImages(list, layer) {
+  let any = false;
+  gl.useProgram(iprog);
+  gl.bindVertexArray(ivao);
+  gl.uniform2f(iuni.u_view, cols * cw, rows * ch);
+  gl.uniform1i(iuni.u_img, 2);
+  for (const [id, entries] of list) {
+    const sel = entries.filter((en) => en.layer === layer);
+    if (!sel.length) continue;
+    const img = imageTexture(id);
+    if (!img) continue;
+    const buf = new Float32Array(sel.length * 8);
+    sel.forEach((en, i) => buf.set([en.dx, en.dy, en.dw, en.dh, en.sx / img.w, en.sy / img.h, en.sw / img.w, en.sh / img.h], i * 8));
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, img.tex);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+    gl.bufferData(gl.ARRAY_BUFFER, buf, gl.STREAM_DRAW);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sel.length);
+    any = true;
+  }
+  gl.useProgram(prog);
+  gl.bindVertexArray(vao);
+  return any;
+}
+
+function gfxList() {
+  const n = x.eng_gfx(e);
+  if (!n) return null;
+  const f = new Float32Array(x.memory.buffer, x.eng_gfx_ptr(e), n * 10);
+  const u = new Uint32Array(x.memory.buffer, x.eng_gfx_ptr(e), n * 10);
+  const byId = new Map();
+  for (let i = 0; i < n; i++) {
+    const o = i * 10, id = u[o];
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push({ layer: u[o + 1], dx: f[o + 2], dy: f[o + 3], dw: f[o + 4], dh: f[o + 5], sx: f[o + 6], sy: f[o + 7], sw: f[o + 8], sh: f[o + 9] });
+  }
+  return byId;
+}
+
+function evictImages() {
+  for (const [id, img] of images) if (frameNo - img.seen > 600) { gl.deleteTexture(img.tex); images.delete(id); }
 }
 
 function clearAtlas() {
@@ -278,7 +406,25 @@ function draw(force) {
   gl.uniform4i(uni.u_cursor, cur[0], cur[1], cur[2], cur[3]);
   const col = new Uint32Array(x.memory.buffer, x.eng_colors(e), 3)[2];
   gl.uniform3f(uni.u_curColor, (col & 255) / 255, ((col >> 8) & 255) / 255, ((col >> 16) & 255) / 255);
-  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+  // With images on screen the cells draw in two passes so placements can sit
+  // between the backgrounds and the text, or above the text.
+  frameNo++;
+  const gfx = gfxList();
+  if (!gfx) {
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+  } else {
+    gl.uniform1i(uni.u_mode, 1);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+    gl.enable(gl.BLEND);
+    drawImages(gfx, 1);
+    drawImages(gfx, 2);
+    gl.uniform1i(uni.u_mode, 2);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
+    drawImages(gfx, 3);
+    gl.disable(gl.BLEND);
+    gl.uniform1i(uni.u_mode, 0);
+    if (frameNo % 300 === 0) evictImages();
+  }
   renders++;
   lastDraw = performance.now();
   if (cur[0] !== lastCur[0] || cur[1] !== lastCur[1] || cur[2] !== lastCur[2]) {

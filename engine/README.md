@@ -24,6 +24,10 @@ uses it.
 | `build.sh` | Links `native/engine.c` and libghostty-vt into `dist/engine.wasm` |
 | `patches/batch-sgr.patch` | Ghostty patch from Wraith (MIT, see `NOTICE`): one style intern per SGR sequence |
 | `patches/decode-stop-at-esc.patch` | The scalar UTF-8 decoder stops at ESC itself instead of scanning for it first |
+| `patches/kitty-freestanding.patch` | Kitty graphics in the freestanding wasm build, direct transmission only (from Wraith, see `NOTICE`) |
+| `native/sixel.c` | Streaming sixel decoder; images go to Ghostty as kitty graphics |
+| `src/net-worker.js`, `src/transport.js` | The connection: sip's protocol over WebSocket or WebTransport, in its own worker |
+| `src/input.js` | DOM keyboard, IME, paste, focus, pointer and wheel listeners |
 | `patches/page-styles-1024.patch` | Standard pages hold 1,024 styles, not 128, so colourful output does not reallocate pages |
 
 ## Build
@@ -35,7 +39,7 @@ ZIG=/path/to/zig-0.16/zig engine/ghostty.sh
 ZIG=/path/to/zig-0.16/zig engine/build.sh
 ```
 
-The result is `engine/dist/engine.wasm`, about 600 KB (180 KB with gzip).
+The result is `engine/dist/engine.wasm`, about 1 MB (330 KB with gzip).
 It imports nothing.
 
 To build the native reference for the accuracy check, run

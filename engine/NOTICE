@@ -1,6 +1,10 @@
-engine/patches/batch-sgr.patch comes from Wraith
-(https://github.com/betterclever/wraithterm, native/patches/batch-sgr.patch),
-used under the MIT License:
+Parts of this directory come from Wraith
+(https://github.com/betterclever/wraithterm), used under the MIT License:
+
+- engine/patches/batch-sgr.patch (native/patches/batch-sgr.patch there)
+- engine/patches/kitty-freestanding.patch (native/patches/kitty-freestanding.patch)
+- the PNG decode hook in engine/native/engine.c follows the approach of
+  decode_png in Wraith's native/bridge.c
 
   MIT License
 
@@ -24,5 +28,7 @@ used under the MIT License:
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 
-The patch modifies Ghostty (https://github.com/ghostty-org/ghostty), which is
-also MIT licensed. libghostty-vt is linked into engine.wasm.
+The patches modify Ghostty (https://github.com/ghostty-org/ghostty), which is
+also MIT licensed. libghostty-vt is linked into engine.wasm, and the
+kitty unicode placeholder table in native/diacritics.h is generated from
+Ghostty's source. Wuffs (Apache 2.0) is linked through libghostty-vt.

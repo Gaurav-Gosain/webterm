@@ -1,0 +1,48 @@
+diff --git a/src/terminal/build_options.zig b/src/terminal/build_options.zig
+index f16cbf4..56ad1f8 100644
+--- a/src/terminal/build_options.zig
++++ b/src/terminal/build_options.zig
+@@ -157,9 +157,8 @@ pub const Options = struct {
+         /// renderer uses to draw placed images. Disabled sequences are
+         /// still consumed and safely ignored.
+         ///
+-        /// This requires the ability to get timestamps from the OS, so
+-        /// it is always disabled on freestanding targets (e.g.
+-        /// wasm32-freestanding) regardless of this setting.
++        /// Freestanding targets (e.g. wasm32-freestanding) support direct
++        /// transmission only; path-based mediums are unavailable there.
+         ///
+         /// C API: `ghostty_kitty_graphics_*`.
+         kitty_graphics: bool = true,
+@@ -267,12 +266,11 @@ pub const Options = struct {
+     };
+ 
+     /// Whether the Kitty graphics feature is effectively enabled for
+-    /// the given target. Kitty graphics requires the ability to get
+-    /// timestamps and there is no way to do that on freestanding
+-    /// targets, so it is always disabled there regardless of the
+-    /// feature setting.
++    /// the given target. Freestanding targets (WebAssembly) support direct
++    /// transmission only: path-based mediums return UnsupportedMedium, and
++    /// animation timing comes from the embedder's tick clock.
+     pub fn kittyGraphics(self: Options, target: std.Target) bool {
+-        if (target.os.tag == .freestanding) return false;
++        _ = target;
+         return self.features.kitty_graphics;
+     }
+ 
+diff --git a/src/terminal/kitty/graphics_image.zig b/src/terminal/kitty/graphics_image.zig
+index 76abb9a..bf4dbc7 100644
+--- a/src/terminal/kitty/graphics_image.zig
++++ b/src/terminal/kitty/graphics_image.zig
+@@ -174,6 +174,10 @@ pub const LoadingImage = struct {
+ 
+         // Otherwise, the payload data is guaranteed to be a path.
+ 
++        // Freestanding hosts (WebAssembly) have no filesystem or shared
++        // memory, so path-based mediums are unavailable there.
++        if (comptime builtin.os.tag == .freestanding) return error.UnsupportedMedium;
++
+         if (comptime builtin.os.tag != .windows) {
+             if (std.mem.indexOfScalar(u8, cmd.data, 0) != null) {
+                 // POSIX paths cannot contain internal nulls.
