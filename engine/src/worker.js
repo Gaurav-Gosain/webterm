@@ -25,7 +25,7 @@ let stageCtx, spr = 0, slotRows = 0;
 let fontFamily = 'monospace', fontPx = 14;
 let lastDraw = 0;
 let lastCur = [-1, -1, -1];
-let selecting = false, copyOnSelect = false;
+let selecting = false, copyOnSelect = false, autoscrollTimer = 0, lastDrag = [0, 0];
 let conn = null, net = null, readOnly = false, observe = false, pingTimer = 0;
 const encoder = new TextEncoder();
 let scheduled = false, rafId = 0, renders = 0, heldSince = 0;
@@ -283,7 +283,7 @@ function draw(force) {
   lastDraw = performance.now();
   if (cur[0] !== lastCur[0] || cur[1] !== lastCur[1] || cur[2] !== lastCur[2]) {
     lastCur = [cur[0], cur[1], cur[2]];
-    self.postMessage({ type: 'cursor', x: cur[0], y: cur[1], visible: !!cur[2] });
+    postCursor();
   }
   if (observe) self.postMessage({ type: 'frame', n: renders, t: performance.timeOrigin + lastDraw, cx: cur[0], cy: cur[1] });
   const dt = performance.now() - t0;
@@ -291,6 +291,22 @@ function draw(force) {
   frameMs.push(dt);
   if (frameMs.length > 4096) frameMs.splice(0, 2048);
   return true;
+}
+
+// The page moves its IME textarea to the cursor. During a flood the cursor
+// moves every frame, and each move costs the main thread a style pass, so
+// positions go out at most every 100 ms, with a trailing one so the last
+// position always arrives.
+const CURSOR_MS = 100;
+let cursorSent = 0, cursorTimer = 0;
+function postCursor() {
+  const now = performance.now();
+  if (now - cursorSent >= CURSOR_MS) {
+    cursorSent = now;
+    self.postMessage({ type: 'cursor', x: lastCur[0], y: lastCur[1], visible: !!lastCur[2] });
+  } else if (!cursorTimer) {
+    cursorTimer = setTimeout(() => { cursorTimer = 0; cursorSent = 0; postCursor(); }, CURSOR_MS - (now - cursorSent));
+  }
 }
 
 function schedule() {
@@ -585,8 +601,18 @@ self.onmessage = async ({ data: m }) => {
           x.eng_select(e, 0, px, py, m.t, 0);
         } else if (m.action === 2 && selecting) {
           x.eng_select(e, 1, px, py, m.t, m.mods & 4 ? 1 : 0);
+          // Held past the top or bottom edge: scroll and extend every 50 ms.
+          lastDrag = [px, py];
+          if (x.eng_autoscroll(e) && !autoscrollTimer) {
+            autoscrollTimer = setInterval(() => {
+              if (!selecting || !x.eng_autoscroll(e)) { clearInterval(autoscrollTimer); autoscrollTimer = 0; return; }
+              x.eng_select(e, 3, lastDrag[0], lastDrag[1], performance.now(), 0);
+              draw(true);
+            }, 50);
+          }
         } else if (m.action === 1 && selecting) {
           selecting = false;
+          clearInterval(autoscrollTimer); autoscrollTimer = 0;
           x.eng_select(e, 2, px, py, m.t, 0);
           postSelection();
         } else break;

@@ -102,7 +102,7 @@ export function attachInput(host, canvas, post, opts = {}) {
   });
   // IME preedit, drawn over the cursor cell while a composition is open.
   const pre = document.createElement('div');
-  Object.assign(pre.style, { position: 'absolute', display: 'none', whiteSpace: 'pre', pointerEvents: 'none', zIndex: '2', textDecoration: 'underline', ...(opts.preeditStyle || {}) });
+  Object.assign(pre.style, { position: 'absolute', left: '0', top: '0', display: 'none', whiteSpace: 'pre', pointerEvents: 'none', zIndex: '2', textDecoration: 'underline', ...(opts.preeditStyle || {}) });
   host.append(pre);
   on(ta, 'compositionupdate', (ev) => { pre.textContent = ev.data || ''; pre.style.display = ev.data ? 'block' : 'none'; });
   on(ta, 'compositionend', () => { pre.textContent = ''; pre.style.display = 'none'; });
@@ -152,9 +152,11 @@ export function attachInput(host, canvas, post, opts = {}) {
     /** The worker's cursor moved: keep the IME window and preedit on it. */
     cursor(x, y) {
       const { cw, ch } = opts.cell();
-      const left = `${x * cw}px`, top = `${y * ch}px`;
-      Object.assign(ta.style, { left, top });
-      Object.assign(pre.style, { left, top, height: `${ch}px`, lineHeight: `${ch}px` });
+      // A transform moves both without a layout pass.
+      const t = `translate(${x * cw}px, ${y * ch}px)`;
+      ta.style.transform = t;
+      pre.style.transform = t;
+      pre.style.height = pre.style.lineHeight = `${ch}px`;
     },
     setSelection(text) { state.selection = text; },
     copy: () => copyNow(),

@@ -100,7 +100,7 @@ typedef struct Eng {
   uint8_t* ev;
   uint32_t ev_len, ev_cap;
   GhosttySelectionGesture gesture;
-  GhosttySelectionGestureEvent gpress, gdrag, grelease;
+  GhosttySelectionGestureEvent gpress, gdrag, grelease, gtick;
   uint8_t* sel_text;
   size_t sel_len;
 } Eng;
@@ -270,7 +270,8 @@ Eng* eng_new(uint16_t cols, uint16_t rows, uint32_t scrollback, uint32_t cw, uin
   if (ghostty_selection_gesture_new(NULL, &e->gesture) ||
       ghostty_selection_gesture_event_new(NULL, &e->gpress, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS) ||
       ghostty_selection_gesture_event_new(NULL, &e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG) ||
-      ghostty_selection_gesture_event_new(NULL, &e->grelease, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE))
+      ghostty_selection_gesture_event_new(NULL, &e->grelease, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE) ||
+      ghostty_selection_gesture_event_new(NULL, &e->gtick, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_AUTOSCROLL_TICK))
     return NULL;
   if (ghostty_key_encoder_new(NULL, &e->kenc) || ghostty_key_event_new(NULL, &e->kev) ||
       ghostty_mouse_encoder_new(NULL, &e->menc) || ghostty_mouse_event_new(NULL, &e->mev))
@@ -736,6 +737,23 @@ uint32_t eng_select(Eng* e, uint32_t kind, double x, double y, double time_ms, u
     ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geo);
     ghostty_selection_gesture_event_set(e->gdrag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_RECTANGLE, &rectangle);
     r = ghostty_selection_gesture_event(e->gesture, e->t, e->gdrag, &sel);
+  } else if (kind == 3) {
+    /* Autoscroll tick: the pointer is held past the top or bottom edge.
+     * Scroll one row toward it, then let the gesture extend the selection
+     * to the row that came into view. */
+    GhosttySelectionGestureAutoscroll dir = GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE;
+    ghostty_selection_gesture_get(e->gesture, e->t, GHOSTTY_SELECTION_GESTURE_DATA_AUTOSCROLL, &dir);
+    if (dir == GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE) return 0;
+    eng_scroll(e, dir == GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_UP ? -1 : 1);
+    GhosttySelectionGestureGeometry geo = {.columns = e->cols, .cell_width = e->cw, .padding_left = 0, .screen_height = e->rows * e->ch};
+    int32_t cx = (int32_t)(x / e->cw);
+    if (cx < 0) cx = 0;
+    if (cx >= e->cols) cx = e->cols - 1;
+    GhosttyPointCoordinate vp = {(uint16_t)cx, dir == GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_UP ? 0u : (uint32_t)(e->rows - 1)};
+    ghostty_selection_gesture_event_set(e->gtick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_VIEWPORT, &vp);
+    ghostty_selection_gesture_event_set(e->gtick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geo);
+    ghostty_selection_gesture_event_set(e->gtick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &pos);
+    r = ghostty_selection_gesture_event(e->gesture, e->t, e->gtick, &sel);
   } else {
     ghostty_selection_gesture_event_set(e->grelease, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, have ? &ref : NULL);
     ghostty_selection_gesture_event(e->gesture, e->t, e->grelease, NULL);
@@ -747,6 +765,13 @@ uint32_t eng_select(Eng* e, uint32_t kind, double x, double y, double time_ms, u
   }
   if (r == GHOSTTY_NO_VALUE && kind == 0) ghostty_terminal_set(e->t, GHOSTTY_TERMINAL_OPT_SELECTION, NULL);
   return 0;
+}
+
+/* 1 up, 2 down, 0 none: whether a held drag wants the viewport to scroll. */
+EXPORT(eng_autoscroll) uint32_t eng_autoscroll(Eng* e) {
+  GhosttySelectionGestureAutoscroll dir = GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE;
+  ghostty_selection_gesture_get(e->gesture, e->t, GHOSTTY_SELECTION_GESTURE_DATA_AUTOSCROLL, &dir);
+  return (uint32_t)dir;
 }
 
 EXPORT(eng_select_clear) void eng_select_clear(Eng* e) {
@@ -796,6 +821,7 @@ EXPORT(eng_free) void eng_free(Eng* e) {
   ghostty_selection_gesture_event_free(e->gpress);
   ghostty_selection_gesture_event_free(e->gdrag);
   ghostty_selection_gesture_event_free(e->grelease);
+  ghostty_selection_gesture_event_free(e->gtick);
   ghostty_selection_gesture_free(e->gesture, e->t);
   if (e->sel_text) ghostty_free(NULL, e->sel_text, e->sel_len);
   if (e->ev) ghostty_free(NULL, e->ev, e->ev_cap);
